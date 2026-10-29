@@ -1,0 +1,14 @@
+fastapi>=0.68.0
+uvicorn>=0.15.0
+opencv-python>=4.9.0.80
+mediapipe==0.10.9
+numpy>=1.26.4  # Keeping the latest version
+scipy>=1.12.0  # Keeping the latest version
+python-multipart>=0.0.9  # Keeping the latest version
+pillow>=10.2.0
+librosa==0.10.1
+soundfile==0.12.1
+audioread==3.0.1
+python-dotenv  # For environment variable management
+aiofiles  # For async file operations, which could help with video handling
+# No server-side ASR package required when using Web Speech API from the browser

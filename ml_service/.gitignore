@@ -1,0 +1,167 @@
+# Project directories
+node_modules/
+venv/
+public/
+scripts/
+__pycache__/
+.env/
+
+# Python
+*.py[cod]
+*.$py.class
+*.so
+*.pyo
+*.pyd
+.Python
+*.pyc
+
+# Python site-packages and dependencies
+site-packages/
+*.dist-info/
+*.egg-info/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Compiled extensions
+*.cpython-*
+*.cython-*
+*.pypy-*
+*.pypy3-*
+*.c
+*.cpp
+*.o
+*.obj
+
+# Specific library files
+pylab.*
+scipy*
+numpy*
+distutils*
+sounddevice*
+typing_extensions*
+libportaudio*
+six.cpython*
+_sounddevice*
+_init_*
+override*
+cffi*
+_cffi*
+*.pyd
+*.dll
+*.dylib
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+.installed.cfg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.env
+.venv
+env.bak/
+venv.bak/
+.Python
+pyvenv.cfg
+
+# ML specific
+*.h5
+*.hdf5
+*.pkl
+*.pth
+*.onnx
+*.tflite
+*.pb
+*.model
+*.joblib
+*.pickle
+model_weights/
+saved_models/
+checkpoints/
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/
+.vs/
+
+# Environment files
+.env*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+local_settings.py
+
+# Logs and databases
+*.log
+*.sqlite
+*.db
+logs/
+log/
+
+# Test coverage
+.coverage
+coverage/
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+.coverage.*
+nosetests.xml
+coverage.xml
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Cache and temporary files
+instance/
+.webassets-cache
+media/
+temp/
+tmp/
+*.tmp
+*.temp
+uploads/
+downloads/
+.cache/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Documentation
+docs/_build/
+site/
+doc/
+docs/api/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db 

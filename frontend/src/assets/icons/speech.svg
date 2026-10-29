@@ -1,0 +1,10 @@
+<!-- filepath: /Users/pragunisanotra/Desktop/Samarth/SamarthApp/src/assets/icons/speech.svg -->
+
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 24 24"
+  width="24"
+  height="24"
+>
+  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17.93c-2.83-.48-5.08-2.73-5.56-5.56H4v-2h3.44c.48-2.83 2.73-5.08 5.56-5.56V4h2v3.44c2.83.48 5.08 2.73 5.56 5.56H20v2h-3.44c-.48 2.83-2.73 5.08-5.56 5.56V20h-2v-3.44z"/>
+</svg>
