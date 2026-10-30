@@ -96,7 +96,7 @@ const AboutPage = () => {
     { icon: <AnalyticsIcon />, name: 'MediaPipe', color: '#4CAF50' },
     { icon: <EyeIcon />, name: 'OpenCV', color: '#2196F3' },
     { icon: <VoiceIcon />, name: 'Librosa', color: '#9C27B0' },
-    { icon: <AIIcon />, name: 'Gemini API', color: '#F44336' },
+    { icon: <AIIcon />, name: 'MIET AI Services', color: '#F44336' },
     { icon: <StorageIcon />, name: 'WebGL', color: '#03A9F4' }
   ];
 

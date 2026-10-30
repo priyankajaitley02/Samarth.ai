@@ -7,9 +7,123 @@ import {
 } from '../config/disorderAssessmentMapping.js';
 
 dotenv.config();
-// Use the LLM Worker API from environment variables
-const LLM_API_URL = process.env.LLM_API_URL;
-const LLM_API_KEY = process.env.LLM_API_KEY;
+// MIET AI Services / LLM Worker API configuration
+const DEFAULT_LLM_URL = 'https://ai-services.mietjmu.in/gateway/llm/chat';
+const DEFAULT_LLM_KEY = 'dgx_9606b21be98085d015540fa7b1a7e0d508661e6a30b6cda9';
+const DEFAULT_LLM_MODELS = [
+  'qwen3.5:9b',
+  'qwen3.6:35b',
+  'gemma3:27b',
+  'gpt-oss:20b',
+  'qwen3:32b',
+  'deepseek-r1:70b',
+  'qwen3.5:122b',
+  'gpt-oss:120b'
+];
+
+const getLlmConfig = () => ({
+  url: process.env.LLM_API_URL || process.env.NEUROBOT_INFERENCE_URL || DEFAULT_LLM_URL,
+  key: process.env.LLM_API_KEY || process.env.NEUROBOT_API_KEY || DEFAULT_LLM_KEY,
+  model: process.env.LLM_MODEL || process.env.NEUROBOT_MODEL || 'qwen3.5:9b'
+});
+
+function getCandidateModels() {
+  const primary = (process.env.LLM_MODEL || process.env.NEUROBOT_MODEL || 'qwen3.5:9b').trim();
+  const fallbacksStr = process.env.LLM_FALLBACK_MODELS || process.env.NEUROBOT_FALLBACK_MODELS || '';
+  const configuredFallbacks = fallbacksStr.split(',').map(m => m.trim()).filter(Boolean);
+  const set = new Set([primary, ...configuredFallbacks, ...DEFAULT_LLM_MODELS]);
+  return Array.from(set);
+}
+
+function extractTextFromResponse(data) {
+  if (!data) return '';
+  if (data.output) return typeof data.output === 'string' ? data.output : JSON.stringify(data.output);
+  if (data.choices && data.choices[0]) {
+    return data.choices[0].message?.content || data.choices[0].text || '';
+  }
+  if (data.content) return typeof data.content === 'string' ? data.content : JSON.stringify(data.content);
+  if (data.result) return typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
+  if (data.response) return typeof data.response === 'string' ? data.response : JSON.stringify(data.response);
+  if (typeof data === 'string') return data;
+  return '';
+}
+
+async function callLlmWithFallback(prompt) {
+  const config = getLlmConfig();
+  const models = getCandidateModels();
+  let lastError = null;
+
+  for (let i = 0; i < models.length; i++) {
+    const currentModel = models[i];
+    try {
+      console.log(`[AI Service] Attempting model ${i + 1}/${models.length}: ${currentModel}`);
+      const response = await axios.post(
+        config.url,
+        {
+          model: currentModel,
+          messages: [{ role: "user", content: prompt }]
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${config.key}`,
+            'x-api-key': config.key
+          },
+          timeout: 45000,
+          maxRedirects: 5
+        }
+      );
+
+      const text = extractTextFromResponse(response.data);
+      if (typeof text === 'string' && text.trim()) {
+        console.log(`[AI Service] Success with model: ${currentModel}`);
+        return { text: text.trim(), model: currentModel };
+      }
+      throw new Error(`Empty response from model ${currentModel}`);
+    } catch (err) {
+      lastError = err;
+      const status = err.response?.status || 'network error';
+      const errMsg = err.response?.data?.message || err.message;
+      console.warn(`[AI Service] Model '${currentModel}' failed (${status}): ${errMsg}. Trying next fallback...`);
+    }
+  }
+
+  // If Gemini API key is configured, fallback to Gemini
+  if (process.env.GEMINI_API_KEY) {
+    console.log('[AI Service] All gateway models failed. Attempting Gemini fallback...');
+    const geminiModels = [process.env.GEMINI_MODEL || 'gemini-3.6-flash', process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash'];
+    for (const gModel of geminiModels) {
+      if (!gModel) continue;
+      try {
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${gModel}:generateContent`;
+        const geminiRes = await axios.post(
+          geminiUrl,
+          {
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json" }
+          },
+          {
+            headers: {
+              "x-goog-api-key": process.env.GEMINI_API_KEY,
+              "Content-Type": "application/json"
+            },
+            timeout: 30000
+          }
+        );
+        const parts = geminiRes.data?.candidates?.[0]?.content?.parts || [];
+        const text = parts.map(p => p.text || '').join('');
+        if (text && text.trim()) {
+          console.log(`[AI Service] Success with Gemini fallback model: ${gModel}`);
+          return { text: text.trim(), model: gModel };
+        }
+      } catch (gErr) {
+        console.warn(`[AI Service] Gemini model '${gModel}' fallback failed: ${gErr.message}`);
+      }
+    }
+  }
+
+  throw lastError || new Error('All AI models failed');
+}
 
 // Helper function to transform assessment data into the expected format
 function transformAssessmentsData(assessments) {
@@ -117,50 +231,9 @@ export const getAiAnalysisResults = async (assessments) => {
     console.log('Making API call to LLM Worker API for comprehensive analysis');
     console.log('Prompt length:', prompt.length);
     
-    // Make API call to LLM Worker API
-    const response = await axios.post(
-      LLM_API_URL,
-      {
-        messages: [
-          { role: "system", content: prompt }
-        ]
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': LLM_API_KEY
-        },
-        timeout: 60000,
-        maxRedirects: 5
-      }
-    );
-    
-    console.log('LLM API response received with status:', response.status);
-    console.log('Response data structure:', JSON.stringify(response.data).substring(0, 300));
-    
-    // Extract text from response - handle multiple possible response formats
-    let text;
-    if (response.data.output) {
-      // LLM Worker API format
-      text = response.data.output;
-    } else if (response.data.choices && response.data.choices[0]) {
-      // OpenAI format
-      text = response.data.choices[0].message?.content || response.data.choices[0].text;
-    } else if (response.data.content) {
-      text = response.data.content;
-    } else if (response.data.result) {
-      text = response.data.result;
-    } else if (typeof response.data === 'string') {
-      text = response.data;
-    } else {
-      console.error('Unexpected response format:', JSON.stringify(response.data).substring(0, 500));
-      throw new Error('Unexpected API response format');
-    }
-    
-    if (!text) {
-      console.error('Failed to extract text from response');
-      throw new Error('No content in API response');
-    }
+    // Make API call with sequential model fallbacks
+    const { text: rawText } = await callLlmWithFallback(prompt);
+    let text = rawText;
     
     // If response contains markdown code blocks, extract the JSON
     if (text.includes('```json')) {
@@ -237,53 +310,9 @@ export const getAiPrediction = async (assessmentData) => {
     // Format assessment data for AI analysis
     const prompt = createAiPrompt(assessmentData);
     
-    console.log('Making API call to LLM Worker API with prompt length:', prompt.length);
-    console.log('API endpoint:', LLM_API_URL);
-    
-    // Make a real API call to LLM Worker API
-    const response = await axios.post(
-      LLM_API_URL,
-      {
-        messages: [
-          { role: "system", content: prompt }
-        ]
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': LLM_API_KEY
-        },
-        timeout: 60000,
-        maxRedirects: 5
-      }
-    );
-    
-    console.log('LLM API response received with status:', response.status);
-    console.log('Response data structure:', JSON.stringify(response.data).substring(0, 300));
-    
-    // Extract the text from the response - handle multiple possible response formats
-    let text;
-    if (response.data.output) {
-      // LLM Worker API format
-      text = response.data.output;
-    } else if (response.data.choices && response.data.choices[0]) {
-      // OpenAI format
-      text = response.data.choices[0].message?.content || response.data.choices[0].text;
-    } else if (response.data.content) {
-      text = response.data.content;
-    } else if (response.data.result) {
-      text = response.data.result;
-    } else if (typeof response.data === 'string') {
-      text = response.data;
-    } else {
-      console.error('Unexpected response format:', JSON.stringify(response.data).substring(0, 500));
-      throw new Error('Unexpected API response format');
-    }
-    
-    if (!text) {
-      console.error('Failed to extract text from response');
-      throw new Error('No content in API response');
-    }
+    // Make API call with sequential model fallbacks
+    const { text: rawText } = await callLlmWithFallback(prompt);
+    let text = rawText;
     
     // If response contains markdown code blocks, extract the JSON
     if (text.includes('```json')) {
@@ -822,49 +851,9 @@ Return EXACTLY this JSON structure with no markdown formatting, no explanation t
 MEDICAL REPORT:
 ${pdfText}`;
 
-    console.log('Making LLM API call with PDF-based prompt');
-
-    // Make API call to LLM Worker API
-    const response = await axios.post(
-      LLM_API_URL,
-      {
-        messages: [
-          { role: "system", content: prompt }
-        ]
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': LLM_API_KEY
-        },
-        timeout: 60000,
-        maxRedirects: 5
-      }
-    );
-
-    console.log('LLM API response received with status:', response.status);
-
-    // Extract text from response
-    let text;
-    if (response.data.output) {
-      text = response.data.output;
-    } else if (response.data.choices && response.data.choices[0]) {
-      text = response.data.choices[0].message?.content || response.data.choices[0].text;
-    } else if (response.data.content) {
-      text = response.data.content;
-    } else if (response.data.result) {
-      text = response.data.result;
-    } else if (typeof response.data === 'string') {
-      text = response.data;
-    } else {
-      console.error('Unexpected response format:', JSON.stringify(response.data).substring(0, 500));
-      throw new Error('Unexpected API response format');
-    }
-
-    if (!text) {
-      console.error('Failed to extract text from response');
-      throw new Error('No content in API response');
-    }
+    // Make API call with sequential model fallbacks
+    const { text: rawText } = await callLlmWithFallback(prompt);
+    let text = rawText;
 
     // Ensure text is a string
     if (typeof text !== 'string') {

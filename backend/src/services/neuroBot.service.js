@@ -28,13 +28,33 @@ const GEMINI_MAX_RETRY_DELAY_MS = readBoundedInteger(
   30000
 );
 
-// Reserved for a future NeuroBot provider adapter. The DGX protocol is not
-// known yet, so this configuration is intentionally not used for requests.
-const NEUROBOT_EXTERNAL_PROVIDER = Object.freeze({
-  endpoint: process.env.NEUROBOT_INFERENCE_URL?.trim() || null,
-  apiKey: process.env.NEUROBOT_API_KEY?.trim() || null,
-  model: process.env.NEUROBOT_MODEL?.trim() || null
-});
+// MIET AI Services (DGX) configuration and fallback models
+const DEFAULT_NEUROBOT_MODELS = [
+  "qwen3.5:9b",
+  "qwen3.6:35b",
+  "gemma3:27b",
+  "gpt-oss:20b",
+  "qwen3:32b",
+  "deepseek-r1:70b",
+  "qwen3.5:122b",
+  "gpt-oss:120b"
+];
+
+function getExternalProviderConfig() {
+  const endpoint = (process.env.NEUROBOT_INFERENCE_URL || process.env.LLM_API_URL || "").trim();
+  const apiKey = (process.env.NEUROBOT_API_KEY || process.env.LLM_API_KEY || "").trim();
+  const primaryModel = (process.env.NEUROBOT_MODEL || process.env.LLM_MODEL || "qwen3.5:9b").trim();
+  const fallbacksStr = process.env.NEUROBOT_FALLBACK_MODELS || process.env.LLM_FALLBACK_MODELS || "";
+  const configuredFallbacks = fallbacksStr.split(",").map((m) => m.trim()).filter(Boolean);
+  const models = Array.from(new Set([primaryModel, ...configuredFallbacks, ...DEFAULT_NEUROBOT_MODELS]));
+
+  return {
+    endpoint: endpoint || null,
+    apiKey: apiKey || null,
+    model: primaryModel,
+    models
+  };
+}
 
 const SAFE_GENERATION_ERROR =
   "AI report generation is temporarily unavailable. Please try again later.";
@@ -168,103 +188,112 @@ const delay = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function isExternalProviderConfigured() {
-  return Boolean(
-    NEUROBOT_EXTERNAL_PROVIDER.endpoint &&
-    NEUROBOT_EXTERNAL_PROVIDER.apiKey &&
-    NEUROBOT_EXTERNAL_PROVIDER.model
-  );
+  const config = getExternalProviderConfig();
+  return Boolean(config.endpoint && config.apiKey);
 }
 
-async function callExternalProvider(prompt, sensitiveValues = []) {
-  const startedAt = Date.now();
-  const model = NEUROBOT_EXTERNAL_PROVIDER.model;
-
-  try {
-    const response = await axios.post(
-      NEUROBOT_EXTERNAL_PROVIDER.endpoint,
-      {
-        model,
-        messages: [{ role: "user", content: prompt }]
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${NEUROBOT_EXTERNAL_PROVIDER.apiKey}`,
-          "Content-Type": "application/json"
-        },
-        timeout: GEMINI_REQUEST_TIMEOUT_MS
-      }
-    );
-
-    const text =
-      response.data?.choices?.[0]?.message?.content ||
-      response.data?.choices?.[0]?.text ||
-      response.data?.output ||
-      response.data?.content ||
-      response.data?.result;
-
-    if (typeof text !== "string" || !text.trim()) {
-      const error = new Error("External provider returned no text");
-      error.code = "EMPTY_RESPONSE";
-      error.status = response.status;
-      error.requestId = getRequestId(response.headers);
-      error.attemptCount = 1;
-      error.durationMs = Date.now() - startedAt;
-      error.model = model;
-      error.failoverEligible = true;
-      throw error;
-    }
-
-    return {
-      text: text.trim(),
-      metadata: {
-        status: response.status,
-        requestId: getRequestId(response.headers),
-        attemptCount: 1,
-        durationMs: Date.now() - startedAt,
-        model
-      }
-    };
-  } catch (error) {
-    const status = Number.isInteger(error.response?.status)
-      ? error.response.status
-      : Number.isInteger(error.status)
-        ? error.status
-        : null;
-    const requestId = error.requestId || getRequestId(error.response?.headers);
-    const providerMessage = error.response?.data?.error?.message ||
-      error.response?.data?.message;
-
-    let safeMessage = typeof providerMessage === "string"
-      ? providerMessage.replace(/[\r\n\t]+/g, " ").trim()
-      : null;
-    for (const value of [NEUROBOT_EXTERNAL_PROVIDER.apiKey, ...sensitiveValues]) {
-      if (typeof value === "string" && value.length >= 3 && safeMessage) {
-        safeMessage = safeMessage.split(value).join("[redacted]");
-      }
-    }
-
-    console.warn("[NeuroBot] External provider request failed", {
-      model,
-      status,
-      requestId,
-      code: sanitizeCode(error.code),
-      message: safeMessage ? safeMessage.slice(0, 240) : null
-    });
-
-    if (error.failoverEligible !== undefined) throw error;
-
-    const requestError = new GeminiRequestError({
-      code: sanitizeCode(error.code),
-      status,
-      requestId,
-      attemptCount: 1,
-      durationMs: Date.now() - startedAt,
-      model,
-      failoverEligible: true
-    });
-    requestError.sensitiveValues = sensitiveValues;
-    throw requestError;
+async function callExternalProvider(prompt, requestedModel = null, sensitiveValues = []) {
+  if (Array.isArray(requestedModel)) {
+    sensitiveValues = requestedModel;
+    requestedModel = null;
   }
+  const startedAt = Date.now();
+  const provider = getExternalProviderConfig();
+  const candidateModels = requestedModel
+    ? Array.from(new Set([requestedModel, ...provider.models]))
+    : provider.models;
+
+  let lastError = null;
+
+  for (let i = 0; i < candidateModels.length; i++) {
+    const model = candidateModels[i];
+    try {
+      console.info(`[NeuroBot] Attempting gateway model ${i + 1}/${candidateModels.length}: ${model}`);
+      const response = await axios.post(
+        provider.endpoint,
+        {
+          model,
+          messages: [{ role: "user", content: prompt }]
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${provider.apiKey}`,
+            "x-api-key": provider.apiKey,
+            "Content-Type": "application/json"
+          },
+          timeout: GEMINI_REQUEST_TIMEOUT_MS
+        }
+      );
+
+      const text =
+        response.data?.choices?.[0]?.message?.content ||
+        response.data?.choices?.[0]?.text ||
+        response.data?.output ||
+        response.data?.content ||
+        response.data?.result ||
+        response.data?.response;
+
+      if (typeof text !== "string" || !text.trim()) {
+        throw new Error(`External provider model ${model} returned empty text`);
+      }
+
+      console.info(`[NeuroBot] Gateway model ${model} succeeded!`);
+      return {
+        text: text.trim(),
+        metadata: {
+          status: response.status,
+          requestId: getRequestId(response.headers),
+          attemptCount: i + 1,
+          durationMs: Date.now() - startedAt,
+          model
+        }
+      };
+    } catch (error) {
+      lastError = error;
+      const status = Number.isInteger(error.response?.status)
+        ? error.response.status
+        : Number.isInteger(error.status)
+          ? error.status
+          : null;
+      const requestId = error.requestId || getRequestId(error.response?.headers);
+      const providerMessage = error.response?.data?.error?.message ||
+        error.response?.data?.message;
+
+      let safeMessage = typeof providerMessage === "string"
+        ? providerMessage.replace(/[\r\n\t]+/g, " ").trim()
+        : null;
+      for (const value of [provider.apiKey, ...sensitiveValues]) {
+        if (typeof value === "string" && value.length >= 3 && safeMessage) {
+          safeMessage = safeMessage.split(value).join("[redacted]");
+        }
+      }
+
+      console.warn("[NeuroBot] External provider model failed", {
+        model,
+        status,
+        requestId,
+        code: sanitizeCode(error.code),
+        message: safeMessage ? safeMessage.slice(0, 240) : null
+      });
+    }
+  }
+
+  // All external models failed
+  const finalStatus = Number.isInteger(lastError?.response?.status)
+    ? lastError.response.status
+    : null;
+  const finalRequestId = getRequestId(lastError?.response?.headers);
+  const requestError = new GeminiRequestError({
+    code: sanitizeCode(lastError?.code),
+    status: finalStatus,
+    requestId: finalRequestId,
+    attemptCount: candidateModels.length,
+    durationMs: Date.now() - startedAt,
+    model: candidateModels[0],
+    failoverEligible: true
+  });
+  requestError.sensitiveValues = sensitiveValues;
+  throw requestError;
 }
 
 // =========================
@@ -607,7 +636,29 @@ Do not claim to diagnose Alzheimer's disease or Parkinson's disease.
 `;
 
   try {
-    const { text } = await callLLM(prompt);
+    let text;
+    if (isExternalProviderConfigured()) {
+      try {
+        const extResult = await callExternalProvider(
+          prompt,
+          getExternalProviderConfig().model,
+          collectSensitiveValues(conversation)
+        );
+        text = extResult.text;
+      } catch (extError) {
+        console.warn("[NeuroBot] External provider failed for conversational turn, attempting Gemini fallback:", extError.message);
+        if (GEMINI_API_KEY) {
+          const geminiResult = await callLLM(prompt);
+          text = geminiResult.text;
+        } else {
+          throw extError;
+        }
+      }
+    } else {
+      const geminiResult = await callLLM(prompt);
+      text = geminiResult.text;
+    }
+
     const result = parseLlmJson(text);
 
     if (
@@ -615,7 +666,7 @@ Do not claim to diagnose Alzheimer's disease or Parkinson's disease.
       typeof result.botText !== "string" ||
       typeof result.extractedData !== "object"
     ) {
-      throw new Error("Gemini returned an unexpected conversation format");
+      throw new Error("AI provider returned an unexpected conversation format");
     }
 
     return result;
@@ -705,14 +756,15 @@ Do not include Markdown formatting or text outside the JSON object.
 
   let generation;
   let generationModel = GEMINI_MODEL;
+  const externalConfig = getExternalProviderConfig();
 
   try {
     if (isExternalProviderConfigured()) {
       generation = await generateForModel(
-        NEUROBOT_EXTERNAL_PROVIDER.model,
+        externalConfig.model,
         callExternalProvider
       );
-      generationModel = NEUROBOT_EXTERNAL_PROVIDER.model;
+      generationModel = generation?.metadata?.model || externalConfig.model;
     } else {
       generation = await generateForModel(GEMINI_MODEL);
     }
@@ -722,14 +774,14 @@ Do not include Markdown formatting or text outside the JSON object.
         ? "[NeuroBot] External provider attempt failed"
         : "[Gemini] Model attempt failed",
       {
-      model: isExternalProviderConfigured()
-        ? NEUROBOT_EXTERNAL_PROVIDER.model
-        : GEMINI_MODEL,
-      durationMs: error.durationMs ?? Date.now() - startedAt,
-      status: Number.isInteger(error.status) ? error.status : null,
-      attemptCount: error.attemptCount ?? 0,
-      requestId: error.requestId ?? null,
-      code: sanitizeCode(error.code)
+        model: isExternalProviderConfigured()
+          ? externalConfig.model
+          : GEMINI_MODEL,
+        durationMs: error.durationMs ?? Date.now() - startedAt,
+        status: Number.isInteger(error.status) ? error.status : null,
+        attemptCount: error.attemptCount ?? 0,
+        requestId: error.requestId ?? null,
+        code: sanitizeCode(error.code)
       }
     );
 

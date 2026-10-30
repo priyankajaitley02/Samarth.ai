@@ -226,3 +226,53 @@ describe("Gemini report generation reliability", () => {
     expect(result.diagnostics.status).toBe(503);
   });
 });
+
+describe("MIET AI Services gateway fallback reliability", () => {
+  let generateMedicalReport;
+
+  beforeAll(async () => {
+    vi.stubEnv("NEUROBOT_INFERENCE_URL", "https://ai-services.mietjmu.in/gateway/llm/chat");
+    vi.stubEnv("NEUROBOT_API_KEY", "dgx_test_key");
+    vi.stubEnv("NEUROBOT_MODEL", "qwen3.5:9b");
+    vi.stubEnv("NEUROBOT_FALLBACK_MODELS", "qwen3.6:35b,gemma3:27b");
+    vi.stubEnv("GEMINI_API_KEY", "");
+    ({ generateMedicalReport } = await import("./neuroBot.service.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterAll(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("tries fallback gateway model when the primary model fails", async () => {
+    // Primary model qwen3.5:9b fails with 403
+    axios.post.mockRejectedValueOnce(providerError(403));
+    // Fallback model qwen3.6:35b succeeds
+    axios.post.mockResolvedValueOnce({
+      status: 200,
+      headers: { "x-request-id": "dgx-req-1" },
+      data: {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify(validReport)
+            }
+          }
+        ]
+      }
+    });
+
+    const result = await generateMedicalReport({ answer: "test" }, "en");
+
+    expect(result.generationStatus).toBe("SUCCEEDED");
+    expect(result.generationModel).toBe("qwen3.6:35b");
+    expect(result.report).toEqual(validReport);
+    expect(axios.post).toHaveBeenCalledTimes(2);
+    expect(axios.post.mock.calls[0][1].model).toBe("qwen3.5:9b");
+    expect(axios.post.mock.calls[1][1].model).toBe("qwen3.6:35b");
+    expect(axios.post.mock.calls[0][2].headers.Authorization).toBe("Bearer dgx_test_key");
+  });
+});
