@@ -18,6 +18,14 @@ import { requestLogger } from './middleware/requestLogger.js';
 import { startSimulator } from './services/neuroSimulator.js';
 import neuroBotRoutes from './routes/neuroBot.routes.js';
 import { gaitAnalysisController } from './controllers/gaitAnalysisController.js';
+import { esp32SensorSerialService } from './services/esp32SensorSerial.service.js';
+import { tremorService } from './services/tremorService.js';
+import {
+  parseEsp32CsvLine,
+  normalizeEsp32JsonPacket,
+  createGaitSensorState,
+  applyGaitSensorUpdate
+} from './services/esp32SensorSerial.service.js';
 
 // Wordlist processing now runs in-process via `services/wordlistWorker.js`
 
@@ -28,36 +36,182 @@ expressWs(app);
 
 // Store WebSocket clients for sensor data broadcasting
 const sensorClients = new Set();
+const gaitDisconnectTimers = { left: null, right: null };
+let gaitSensorState = createGaitSensorState();
+const SENSOR_HEARTBEAT_INTERVAL_MS = 30000;
+
+function broadcastGaitSensorUpdate(update) {
+  const side = update.side;
+  if (!gaitSensorState[side]) return;
+
+  gaitSensorState = applyGaitSensorUpdate(gaitSensorState, update);
+
+  if (gaitDisconnectTimers[side]) clearTimeout(gaitDisconnectTimers[side]);
+  if (update.reading || update.connected) {
+    gaitDisconnectTimers[side] = setTimeout(() => {
+      broadcastGaitSensorUpdate({
+        side,
+        deviceId: update.deviceId,
+        connected: false,
+        timestamp: Date.now()
+      });
+    }, 2500);
+  }
+
+  broadcastGaitSensorState(update.source || "esp32", update.deviceId, update.timestamp);
+}
+
+function broadcastGaitSensorState(source, deviceId, timestamp = Date.now()) {
+  const payload = {
+    type: "esp32_insole_data",
+    source,
+    deviceId,
+    leftFoot: gaitSensorState.left,
+    rightFoot: gaitSensorState.right,
+    timestamp
+  };
+
+  sensorClients.forEach((client) => {
+    if (client.readyState === 1 && !client.isSensorProducer) {
+      try {
+        client.send(JSON.stringify(payload));
+      } catch (error) {
+        console.error("Error broadcasting Gait sensor data:", error.message);
+      }
+    }
+  });
+}
 
 // WebSocket route for sensor data streaming
 app.ws('/ws/sensors', (ws, req) => {
   console.log('✅ Sensor WebSocket client connected');
   sensorClients.add(ws);
+  let serialBuffer = '';
+  let deviceId = req.query?.deviceId || req.headers['x-device-id'] || null;
+  let deviceSide = String(deviceId || '').toLowerCase().includes('right')
+    ? 'right'
+    : String(deviceId || '').toLowerCase().includes('left')
+      ? 'left'
+      : null;
+  ws.isSensorProducer = Boolean(deviceSide);
+  ws.isAlive = true;
+
+  const heartbeatTimer = setInterval(() => {
+    if (ws.isAlive === false) {
+      console.warn('Terminating unresponsive sensor WebSocket client', {
+        deviceId: deviceId || 'unknown'
+      });
+      ws.terminate();
+      return;
+    }
+
+    ws.isAlive = false;
+    ws.ping();
+  }, SENSOR_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref?.();
+
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
+
+  if (!ws.isSensorProducer) {
+    broadcastGaitSensorState("esp32_state", deviceId);
+  }
   
   ws.on('message', (msg) => {
     try {
-      const data = JSON.parse(msg);
-      console.log('📊 Received sensor data from:', data.deviceId || 'unknown');
-      
-      // Broadcast to all connected clients
-      sensorClients.forEach(client => {
-        if (client.readyState === 1) { // OPEN
-          client.send(JSON.stringify(data));
+      const text = typeof msg === 'string' ? msg : msg.toString('utf8');
+
+      if (text.trim().startsWith('{')) {
+        let packet;
+        try {
+          packet = normalizeEsp32JsonPacket(JSON.parse(text), deviceId);
+        } catch (error) {
+          console.warn('Ignoring malformed sensor JSON:', error.message);
+          return;
         }
-      });
+
+        if (!packet) {
+          console.warn('Ignoring sensor JSON with unknown device or no sensor values');
+          return;
+        }
+
+        if (!deviceSide) {
+          deviceId = packet.deviceId;
+          deviceSide = packet.side;
+          ws.isSensorProducer = true;
+          console.log('Identified sensor WebSocket client', {
+            deviceId,
+            side: deviceSide
+          });
+        }
+
+        broadcastGaitSensorUpdate({
+          side: packet.side,
+          deviceId: packet.deviceId,
+          reading: packet.reading,
+          source: "esp32_wifi",
+          timestamp: packet.timestamp
+        });
+        return;
+      }
+
+      serialBuffer += text;
+      const lines = serialBuffer.split(/\r?\n/);
+      serialBuffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const parsed = parseEsp32CsvLine(line);
+        if (parsed === 'header') continue;
+        if (!parsed) {
+          console.warn('Ignoring invalid sensor CSV message');
+          continue;
+        }
+        if (!deviceSide) {
+          console.warn('Ignoring sensor CSV without left/right deviceId');
+          continue;
+        }
+        broadcastGaitSensorUpdate({
+          side: deviceSide,
+          deviceId,
+          reading: parsed,
+          source: "esp32_wifi",
+          timestamp: Date.now()
+        });
+      }
     } catch (error) {
       console.error('Error processing sensor data:', error);
     }
   });
-  
+
   ws.on('close', () => {
     console.log('❌ Sensor WebSocket client disconnected');
+    clearInterval(heartbeatTimer);
     sensorClients.delete(ws);
+    if (deviceSide) {
+      broadcastGaitSensorUpdate({
+        side: deviceSide,
+        deviceId,
+        connected: false,
+        source: "esp32_wifi",
+        timestamp: Date.now()
+      });
+    }
   });
   
   ws.on('error', (error) => {
     console.error('WebSocket error:', error);
+    clearInterval(heartbeatTimer);
     sensorClients.delete(ws);
+    if (deviceSide) {
+      broadcastGaitSensorUpdate({
+        side: deviceSide,
+        deviceId,
+        connected: false,
+        source: "esp32_wifi",
+        timestamp: Date.now()
+      });
+    }
   });
 });
 
@@ -184,6 +338,11 @@ mongoose.connect(process.env.MONGODB_URI || "mongodb://localhost:27017/samarth")
       if (process.env.NEURO_SIMULATOR === 'true') {
         startSimulator();
       }
+
+      esp32SensorSerialService.start(
+        (payload) => tremorService.broadcastSensorData(payload),
+        broadcastGaitSensorUpdate
+      );
     });
   })
   .catch((error) => {

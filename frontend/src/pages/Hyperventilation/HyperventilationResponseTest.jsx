@@ -107,9 +107,9 @@ const HyperventilationResponseTest = ({ userId: propUserId } = {}) => {
       if (resp.ok && json.summary) {
         console.log('Setting test results:', json.summary);
         setTestResults(json.summary);
-      } else if (resp.ok && json.success === false) {
+      } else if (!resp.ok || json.success === false) {
         console.error('Test completion failed:', json.message, json.debug);
-        alert(`Test completion failed: ${json.message}\n\nPlease check:\n- WebSocket connection was active\n- All phases were completed\n- Data was being captured\n\nDebug info: ${JSON.stringify(json.debug || {})}`);
+        alert(`Test completion failed: ${json.message || 'The server could not save the completed test.'}\n\nPlease check:\n- WebSocket connection was active\n- All phases were completed\n- Data was being captured\n\nDebug info: ${JSON.stringify(json.debug || {})}`);
         setTestResults(null);
       } else {
         console.error('Unexpected response format or error:', json);

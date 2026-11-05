@@ -1,4 +1,4 @@
-import { assessmentService } from './assessmentService.js';
+import api, { assessment } from './api.js';
 
 /**
  * Service for managing hyperventilation test data and integration with assessments
@@ -31,21 +31,13 @@ export const hyperventilationService = {
         status: 'COMPLETED'
       };
 
-      // Save using the existing assessment service
-      const response = await fetch('/api/assessments', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify(assessmentData)
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to save assessment');
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
       }
 
-      return await response.json();
+      const response = await assessment.save(assessmentData);
+      return response.data;
     } catch (error) {
       console.error('Error saving hyperventilation test to assessments:', error);
       throw error;
@@ -57,17 +49,13 @@ export const hyperventilationService = {
    */
   async getTestResults(userId) {
     try {
-      const response = await fetch(`/api/assessments/${userId}/HYPERVENTILATION_TEST`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to retrieve assessment');
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
       }
 
-      return await response.json();
+      const response = await api.get(`/assessments/${userId}/HYPERVENTILATION_TEST`);
+      return response.data;
     } catch (error) {
       console.error('Error retrieving hyperventilation test results:', error);
       throw error;

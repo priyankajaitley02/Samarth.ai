@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 /**
  * CameraView component for live video, frame processing, and overlay rendering.
@@ -14,6 +14,9 @@ import React, { useEffect, useRef } from 'react';
 const CameraView = ({ videoRef, canvasRef, onFrame, renderOverlay, cameraReady, setCameraReady, width = 640, height = 480 }) => {
   const localCanvasRef = useRef(null);
   const animationRef = useRef(null);
+  const streamRef = useRef(null);
+  const retryTimerRef = useRef(null);
+  const mountedRef = useRef(false);
 
   // Animation loop: process frame and draw overlay
   useEffect(() => {
@@ -46,24 +49,69 @@ const CameraView = ({ videoRef, canvasRef, onFrame, renderOverlay, cameraReady, 
 
   // Camera setup logic: getUserMedia and srcObject assignment
   useEffect(() => {
-    let stream;
+    mountedRef.current = true;
+    let setupInProgress = false;
+
     const setupCamera = async () => {
+      if (setupInProgress || streamRef.current || !mountedRef.current) return;
+      setupInProgress = true;
+
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { width, height, facingMode: 'user' } });
-        if (videoRef && videoRef.current) {
-          videoRef.current.srcObject = stream;
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width, height, facingMode: 'user' }
+        });
+
+        if (!mountedRef.current || !videoRef?.current) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
         }
-      } catch (e) {
-        setCameraReady && setCameraReady(false);
+
+        streamRef.current = stream;
+        videoRef.current.srcObject = stream;
+        stream.getVideoTracks().forEach(track => {
+          track.onended = () => {
+            if (!mountedRef.current) return;
+            streamRef.current = null;
+            setCameraReady && setCameraReady(false);
+            if (!retryTimerRef.current) {
+              retryTimerRef.current = window.setTimeout(() => {
+                retryTimerRef.current = null;
+                setupCamera();
+              }, 1000);
+            }
+          };
+        });
+        setCameraReady && setCameraReady(true);
+      } catch {
+        if (mountedRef.current) {
+          setCameraReady && setCameraReady(false);
+        }
+      } finally {
+        setupInProgress = false;
       }
     };
+
     setupCamera();
+
+    const videoElement = videoRef?.current;
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+      mountedRef.current = false;
+      if (retryTimerRef.current) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => {
+          track.onended = null;
+          track.stop();
+        });
+        streamRef.current = null;
+      }
+      if (videoElement) {
+        videoElement.srcObject = null;
       }
     };
-  }, [videoRef, width, height, setCameraReady]);
+  }, [videoRef, width, height]);
 
   return (
     <div style={{ position: 'relative', width, height, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)', borderRadius: 20, boxShadow: '0 4px 24px #0091a122', overflow: 'hidden' }}>

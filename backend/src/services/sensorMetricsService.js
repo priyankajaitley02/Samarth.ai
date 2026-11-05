@@ -379,6 +379,10 @@ export const sensorMetricsService = {
       if (packet.imu?.gyro) {
         angularVelocities.push(packet.imu.gyro);
       }
+      [packet.leftFoot, packet.rightFoot].forEach(foot => {
+        if (foot?.imu?.accel) accelerations.push(foot.imu.accel);
+        if (foot?.imu?.gyro) angularVelocities.push(foot.imu.gyro);
+      });
     });
 
     return {

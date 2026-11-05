@@ -221,7 +221,6 @@ const Tremor = ({ userId, onComplete }) => {
   }
 
   const trend = computeTrend(history, 12);
-
   return (
     <Box sx={{ p: 2 }}>
       <Typography variant="h5">Smart Glove — Tremor Assessment</Typography>

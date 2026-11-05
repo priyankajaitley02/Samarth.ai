@@ -1,6 +1,7 @@
 import EpilepsyTest from '../models/EpilepsyTest.js';
 import SignalFrame from '../models/SignalFrame.js';
 import HyperventilationAssessment from '../models/HyperventilationAssessment.js';
+import { flushPendingSaves } from './hyperventilationWebSocket.js';
 import mongoose from 'mongoose';
 
 // Function to calculate EEG band powers from raw data
@@ -83,6 +84,11 @@ function detectAbnormalities(eegData, phase) {
     slowingIndicator: Math.round((slowingIndicator / centered.length) * 100),
     abnormalities
   };
+}
+
+function phaseSummaryDuration(phase) {
+  if (!phase?.startTime || !phase?.endTime) return 0;
+  return Math.max(0, (phase.endTime.getTime() - phase.startTime.getTime()) / 1000);
 }
 
 // Function to generate clinical indicators
@@ -211,6 +217,8 @@ export async function completeTest(req, res) {
     
     const t = await EpilepsyTest.findById(testId);
     if (!t) return res.status(404).json({ success: false, message: 'Test not found' });
+
+    await flushPendingSaves();
     
     console.log('[completeTest] Test found with', t.phases.length, 'phases');
 
@@ -327,34 +335,29 @@ export async function completeTest(req, res) {
       }
     };
 
-    t.endedAt = new Date();
-    t.status = 'completed';
-    t.summaryMetrics = summary;
-    await t.save();
-
     // Save HyperventilationAssessment result (following assessment model pattern)
     try {
-      const baselineData = allPhaseData.baseline || { eegData: [] };
-      const hvData = allPhaseData.hyperventilation || { eegData: [] };
-      const recoveryData = allPhaseData.recovery || { eegData: [] };
+      const baselineData = allPhaseData.baseline || null;
+      const hvData = allPhaseData.hyperventilation || null;
+      const recoveryData = allPhaseData.recovery || null;
 
       // Calculate metrics for each phase
       const extractPhaseMetrics = (phaseData, phaseName) => {
-        if (!phaseData || !phaseData.eegData || phaseData.eegData.length === 0) {
+        if (!phaseData) {
           return {
-            duration: 60,
+            duration: 0,
             heartRate: 0,
             bandPowers: { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 },
             spikes: 0
           };
         }
 
-        const phaseInfo = t.phases.find(p => p.name === phaseName) || {};
+        const phaseInfo = t.phases.find(p => p.phaseName === phaseName) || {};
         return {
-          duration: phaseInfo.duration || 60,
-          heartRate: phaseData.hr || 0,
+          duration: phaseSummaryDuration(phaseInfo),
+          heartRate: 0,
           bandPowers: phaseData.bandPowers || { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 },
-          spikes: phaseData.spikes || 0
+          spikes: phaseData.abnormalities?.spikeCount || 0
         };
       };
 
@@ -414,12 +417,25 @@ export async function completeTest(req, res) {
         }
       });
 
+      if (!t.userId) {
+        throw new Error('Test is missing the user ID required to save the assessment');
+      }
+
       await assessment.save();
       console.log('[completeTest] HyperventilationAssessment saved:', assessment._id);
     } catch (assessmentErr) {
       console.error('[completeTest] Error saving HyperventilationAssessment:', assessmentErr.message);
-      // Don't fail the test completion if assessment save fails
+      return res.status(500).json({
+        success: false,
+        message: 'The test was analyzed, but the completed assessment could not be saved.',
+        error: assessmentErr.message
+      });
     }
+
+    t.endedAt = new Date();
+    t.status = 'completed';
+    t.summaryMetrics = summary;
+    await t.save();
 
     return res.json({ success: true, summary });
   } catch (err) {

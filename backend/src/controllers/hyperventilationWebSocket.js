@@ -3,6 +3,7 @@ import SignalFrame from '../models/SignalFrame.js';
 import mongoose from 'mongoose';
 
 const wsClients = new Map(); // Map of ws -> {testId, ws}
+const pendingSaves = new Set();
 
 export function addClient(ws, testId) {
   console.log('HV WS client connected with testId:', testId);
@@ -26,11 +27,15 @@ export function broadcast(payload) {
       ws.send(str);
       
       // Also save EEG data to database if testId is set
-      if (testId && payload.eeg_raw && Array.isArray(payload.eeg_raw)) {
-          console.log('[hvWs.broadcast] Calling saveSignalFrame with testId:', testId);
-        saveSignalFrame(testId, payload.eeg_raw, payload.timestamp).catch(err => {
-          console.error('Error saving signal frame for HV test:', err);
-        });
+      if (testId && Array.isArray(payload.eeg_raw)) {
+        const samples = payload.eeg_raw.filter(sample => Number.isFinite(Number(sample))).map(Number);
+        if (samples.length > 0) {
+          const save = saveSignalFrame(testId, samples, payload.timestamp);
+          pendingSaves.add(save);
+          save.catch(err => {
+            console.error('Error saving signal frame for HV test:', err);
+          }).finally(() => pendingSaves.delete(save));
+        }
       }
     } catch (e) {
       try { ws.terminate(); } catch (e2) {}
@@ -64,6 +69,10 @@ async function saveSignalFrame(testId, eegData, timestamp) {
   } catch (err) {
     console.error('[saveSignalFrame] Failed to save signal frame:', err.message, 'testId:', testId);
   }
+}
+
+export async function flushPendingSaves() {
+  await Promise.allSettled([...pendingSaves]);
 }
 
 export function clientCount() { return wsClients.size; }

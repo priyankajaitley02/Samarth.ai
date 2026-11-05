@@ -90,18 +90,35 @@ const GaitAnalysis = ({ userId, onComplete }) => {
   const sensorBufferRef = useRef([]); // Store raw sensor packets during assessment
   const isRecordingRef = useRef(false); // Ref for WebSocket handler to access current recording state
   const [hybridMetrics, setHybridMetrics] = useState(null);
+  const lastSensorPacketRef = useRef(null);
+  const sensorStatusTimerRef = useRef(null);
+  const clearFootData = (foot) => ({
+    ...foot,
+    connected: false,
+    fsr: Object.fromEntries(Object.keys(foot.fsr).map(key => [key, null])),
+    imu: {
+      accel: { x: null, y: null, z: null },
+      gyro: { x: null, y: null, z: null }
+    }
+  });
   const [sensorData, setSensorData] = useState({
     deviceId: null,
     connected: false,
     leftFoot: {
-      fsr: { sensor1: 0, sensor2: 0, sensor3: 0, sensor4: 0, sensor5: 0, sensor6: 0 }
+      connected: false,
+      fsr: { sensor1: null, sensor2: null, sensor3: null, sensor4: null, sensor5: null, sensor6: null },
+      imu: {
+        accel: { x: null, y: null, z: null },
+        gyro: { x: null, y: null, z: null }
+      }
     },
     rightFoot: {
-      fsr: { sensor1: 0, sensor2: 0, sensor3: 0, sensor4: 0, sensor5: 0, sensor6: 0 }
-    },
-    imu: {
-      accel: { x: 0, y: 0, z: 0 },
-      gyro: { x: 0, y: 0, z: 0 }
+      connected: false,
+      fsr: { sensor1: null, sensor2: null, sensor3: null, sensor4: null, sensor5: null, sensor6: null },
+      imu: {
+        accel: { x: null, y: null, z: null },
+        gyro: { x: null, y: null, z: null }
+      }
     },
     timestamp: null
   });
@@ -141,11 +158,12 @@ const GaitAnalysis = ({ userId, onComplete }) => {
 
   // Connect to WebSocket server
   useEffect(() => {
-    const websocket = new WebSocket('ws://localhost:5000/ws/sensors');
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const host = window.location.hostname || 'localhost';
+    const websocket = new WebSocket(`${protocol}://${host}:5000/ws/sensors`);
 
     websocket.onopen = () => {
       console.log('✅ WebSocket connected to /ws/sensors');
-      setSensorData(prev => ({ ...prev, connected: true }));
     };
 
     websocket.onmessage = (event) => {
@@ -160,19 +178,47 @@ const GaitAnalysis = ({ userId, onComplete }) => {
 
     websocket.onclose = () => {
       console.log('❌ WebSocket disconnected');
-      setSensorData(prev => ({ ...prev, connected: false }));
+      setSensorData(prev => ({
+        ...prev,
+        connected: false,
+        leftFoot: clearFootData(prev.leftFoot),
+        rightFoot: clearFootData(prev.rightFoot)
+      }));
     };
 
     websocket.onerror = (error) => {
       console.error('WebSocket error:', error);
-      setSensorData(prev => ({ ...prev, connected: false }));
+      setSensorData(prev => ({
+        ...prev,
+        connected: false,
+        leftFoot: clearFootData(prev.leftFoot),
+        rightFoot: clearFootData(prev.rightFoot)
+      }));
     };
+
+    sensorStatusTimerRef.current = window.setInterval(() => {
+      if (
+        lastSensorPacketRef.current &&
+        Date.now() - lastSensorPacketRef.current > 2000
+      ) {
+        setSensorData(prev => ({
+          ...prev,
+          connected: false,
+          leftFoot: clearFootData(prev.leftFoot),
+          rightFoot: clearFootData(prev.rightFoot)
+        }));
+      }
+    }, 1000);
 
     setWs(websocket);
 
     return () => {
       if (websocket.readyState === WebSocket.OPEN) {
         websocket.close();
+      }
+      if (sensorStatusTimerRef.current) {
+        window.clearInterval(sensorStatusTimerRef.current);
+        sensorStatusTimerRef.current = null;
       }
     };
   }, []);
@@ -530,23 +576,25 @@ const GaitAnalysis = ({ userId, onComplete }) => {
           ESP32 Insole Sensors
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
-          <Box
-            sx={{
-              width: 12,
-              height: 12,
-              borderRadius: '50%',
-              bgcolor: sensorData.connected ? 'success.main' : 'error.main',
-              mr: 1
-            }}
-          />
-          <Typography variant="body2" color="text.secondary">
-            {sensorData.connected ? 'Connected' : 'Disconnected'}
-          </Typography>
-          {sensorData.deviceId && (
-            <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>
-              ({sensorData.deviceId})
-            </Typography>
-          )}
+          {[
+            ['Left', sensorData.leftFoot.connected],
+            ['Right', sensorData.rightFoot.connected]
+          ].map(([label, connected]) => (
+            <Box key={label} sx={{ display: 'flex', alignItems: 'center', ml: 2 }}>
+              <Box
+                sx={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: '50%',
+                  bgcolor: connected ? 'success.main' : 'error.main',
+                  mr: 0.75
+                }}
+              />
+              <Typography variant="body2" color="text.secondary">
+                {label}: {connected ? 'Connected' : 'Disconnected'}
+              </Typography>
+            </Box>
+          ))}
         </Box>
       </Box>
       
@@ -564,7 +612,7 @@ const GaitAnalysis = ({ userId, onComplete }) => {
                     <Typography variant="caption" color="text.secondary">
                       {key.replace('sensor', 'FSR ')}
                     </Typography>
-                    <Typography variant="h6">{value}</Typography>
+                    <Typography variant="h6">{value ?? 'N/A'}</Typography>
                   </Box>
                 </Grid>
               ))}
@@ -585,7 +633,7 @@ const GaitAnalysis = ({ userId, onComplete }) => {
                     <Typography variant="caption" color="text.secondary">
                       {key.replace('sensor', 'FSR ')}
                     </Typography>
-                    <Typography variant="h6">{value}</Typography>
+                    <Typography variant="h6">{value ?? 'N/A'}</Typography>
                   </Box>
                 </Grid>
               ))}
@@ -600,42 +648,42 @@ const GaitAnalysis = ({ userId, onComplete }) => {
               IMU Sensors
             </Typography>
             <Grid container spacing={2}>
-              <Grid item xs={12} md={6}>
-                <Box>
+              {[
+                ['Left Foot', sensorData.leftFoot],
+                ['Right Foot', sensorData.rightFoot]
+              ].map(([label, foot]) => (
+                <Grid item xs={12} md={6} key={label}>
+                  <Box>
+                  <Typography variant="body2" color={foot.connected ? 'text.primary' : 'text.secondary'}>
+                    {label}: {foot.connected ? 'Connected' : 'Unavailable'}
+                  </Typography>
                   <Typography variant="caption" color="text.secondary" display="block">
                     Accelerometer (m/s²)
                   </Typography>
                   <Grid container spacing={1}>
-                    <Grid item xs={4}>
-                      <Typography variant="body2">X: {sensorData.imu.accel.x.toFixed(2)}</Typography>
-                    </Grid>
-                    <Grid item xs={4}>
-                      <Typography variant="body2">Y: {sensorData.imu.accel.y.toFixed(2)}</Typography>
-                    </Grid>
-                    <Grid item xs={4}>
-                      <Typography variant="body2">Z: {sensorData.imu.accel.z.toFixed(2)}</Typography>
-                    </Grid>
+                    {['x', 'y', 'z'].map(axis => (
+                      <Grid item xs={4} key={`${label}-accel-${axis}`}>
+                        <Typography variant="body2">
+                          {axis.toUpperCase()}: {foot.imu.accel[axis]?.toFixed(2) ?? 'N/A'}
+                        </Typography>
+                      </Grid>
+                    ))}
                   </Grid>
-                </Box>
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <Box>
                   <Typography variant="caption" color="text.secondary" display="block">
                     Gyroscope (°/s)
                   </Typography>
                   <Grid container spacing={1}>
-                    <Grid item xs={4}>
-                      <Typography variant="body2">X: {sensorData.imu.gyro.x.toFixed(2)}</Typography>
+                    {['x', 'y', 'z'].map(axis => (
+                      <Grid item xs={4} key={`${label}-gyro-${axis}`}>
+                        <Typography variant="body2">
+                          {axis.toUpperCase()}: {foot.imu.gyro[axis]?.toFixed(2) ?? 'N/A'}
+                        </Typography>
+                      </Grid>
+                    ))}
                     </Grid>
-                    <Grid item xs={4}>
-                      <Typography variant="body2">Y: {sensorData.imu.gyro.y.toFixed(2)}</Typography>
-                    </Grid>
-                    <Grid item xs={4}>
-                      <Typography variant="body2">Z: {sensorData.imu.gyro.z.toFixed(2)}</Typography>
-                    </Grid>
-                  </Grid>
-                </Box>
-              </Grid>
+                  </Box>
+                </Grid>
+              ))}
             </Grid>
           </Paper>
         </Grid>
@@ -786,13 +834,37 @@ const GaitAnalysis = ({ userId, onComplete }) => {
 
   // Handle incoming sensor data from WebSocket
   const handleSensorData = (data) => {
-    // Update sensor data state for display
+    if (data.type === 'esp32_insole_data') {
+      lastSensorPacketRef.current = Date.now();
+    }
+
+    const legacyImu = data.imu;
+
+    // Merge each side so a packet from one insole cannot erase the other.
     setSensorData(prevData => ({
       deviceId: data.deviceId,
-      connected: true,
-      leftFoot: data.leftFoot || prevData.leftFoot,
-      rightFoot: data.rightFoot || prevData.rightFoot,
-      imu: data.imu || prevData.imu,
+      connected: data.type === 'esp32_insole_data'
+        ? Boolean(data.leftFoot?.connected || data.rightFoot?.connected)
+        : prevData.connected,
+      leftFoot: {
+        ...prevData.leftFoot,
+        ...(data.leftFoot || {}),
+        connected: data.leftFoot?.connected ?? (legacyImu ? true : prevData.leftFoot.connected),
+        fsr: { ...prevData.leftFoot.fsr, ...(data.leftFoot?.fsr || {}) },
+        imu: { ...prevData.leftFoot.imu, ...(data.leftFoot?.imu || legacyImu || {}),
+          accel: { ...prevData.leftFoot.imu.accel, ...(data.leftFoot?.imu?.accel || legacyImu?.accel || {}) },
+          gyro: { ...prevData.leftFoot.imu.gyro, ...(data.leftFoot?.imu?.gyro || legacyImu?.gyro || {}) }
+        }
+      },
+      rightFoot: {
+        ...prevData.rightFoot,
+        ...(data.rightFoot || {}),
+        fsr: { ...prevData.rightFoot.fsr, ...(data.rightFoot?.fsr || {}) },
+        imu: { ...prevData.rightFoot.imu, ...(data.rightFoot?.imu || {}),
+          accel: { ...prevData.rightFoot.imu.accel, ...(data.rightFoot?.imu?.accel || {}) },
+          gyro: { ...prevData.rightFoot.imu.gyro, ...(data.rightFoot?.imu?.gyro || {}) }
+        }
+      },
       timestamp: data.timestamp || Date.now()
     }));
 

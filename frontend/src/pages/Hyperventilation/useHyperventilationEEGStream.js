@@ -7,6 +7,7 @@ const clampArray = (arr, maxLen) => (arr.length > maxLen ? arr.slice(arr.length 
 
 export default function useHyperventilationEEGStream(testId) {
   const wsRef = useRef(null);
+  const lastPacketRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [eegData, setEegData] = useState([]);
   const [ecgData, setEcgData] = useState([]);
@@ -22,6 +23,7 @@ export default function useHyperventilationEEGStream(testId) {
 
   const connect = (overrideTestId) => {
     if (wsRef.current) wsRef.current.close();
+    lastPacketRef.current = null;
     const idToUse = overrideTestId || testId;
     const ws = new WebSocket(WS_URL + (idToUse ? `?testId=${idToUse}` : ''));
     wsRef.current = ws;
@@ -31,11 +33,17 @@ export default function useHyperventilationEEGStream(testId) {
     ws.onmessage = (evt) => {
       try {
         const d = JSON.parse(evt.data);
-        if (d.eeg_raw) {
-          setEegData(prev => clampArray(prev.concat(d.eeg_raw), 1024));
+        if (Array.isArray(d.eeg_raw)) {
+          const samples = d.eeg_raw.map(Number).filter(Number.isFinite);
+          const packetKey = `${d.timestamp ?? ''}:${samples.length}:${samples[samples.length - 1] ?? ''}`;
+          if (samples.length > 0 && packetKey !== lastPacketRef.current) {
+            lastPacketRef.current = packetKey;
+            setEegData(prev => clampArray(prev.concat(samples), 1024));
+          }
         }
-        if (d.ecg_raw) {
-          setEcgData(prev => clampArray(prev.concat(d.ecg_raw), 1024));
+        if (Array.isArray(d.ecg_raw)) {
+          const samples = d.ecg_raw.map(Number).filter(Number.isFinite);
+          setEcgData(prev => clampArray(prev.concat(samples), 1024));
         }
         if (d.bands) setBands(d.bands);
         if (typeof d.hr !== 'undefined') setHr(d.hr);

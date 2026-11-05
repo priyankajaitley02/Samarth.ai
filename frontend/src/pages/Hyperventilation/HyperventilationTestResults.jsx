@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Paper,
@@ -37,7 +37,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import hyperventilationService from '../../services/hyperventilationService.js';
 
 const HyperventilationTestResults = ({ summary, testId }) => {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [activeTab, setActiveTab] = useState(0);
   const [printDialogOpen, setPrintDialogOpen] = useState(false);
   const [savingToAssessments, setSavingToAssessments] = useState(false);
@@ -45,12 +45,9 @@ const HyperventilationTestResults = ({ summary, testId }) => {
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [snackbarSeverity, setSnackbarSeverity] = useState('success');
 
-  useEffect(() => {
-    // Auto-save to assessments on component mount
-    handleSaveToAssessments();
-  }, []);
+  const saveAttemptedRef = React.useRef(false);
 
-  const handleSaveToAssessments = async () => {
+  const handleSaveToAssessments = useCallback(async () => {
     if (!user || !user.id) {
       setSnackbarMessage('User not authenticated');
       setSnackbarSeverity('error');
@@ -72,7 +69,21 @@ const HyperventilationTestResults = ({ summary, testId }) => {
     } finally {
       setSavingToAssessments(false);
     }
-  };
+  }, [summary, testId, user]);
+
+  useEffect(() => {
+    if (authLoading || !summary || saveAttemptedRef.current) return;
+
+    if (!user?.id) {
+      setSnackbarMessage('User is not authenticated');
+      setSnackbarSeverity('error');
+      setSnackbarOpen(true);
+      return;
+    }
+
+    saveAttemptedRef.current = true;
+    handleSaveToAssessments();
+  }, [authLoading, handleSaveToAssessments, summary, testId, user]);
 
   if (!summary) {
     return (

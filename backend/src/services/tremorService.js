@@ -221,6 +221,7 @@ export const tremorService = {
   // Viewer registration for live updates
   registerViewer(ws) { viewers.add(ws); },
   unregisterViewer(ws) { viewers.delete(ws); },
+  broadcastSensorData(data) { broadcastToViewers(data); },
 
   // Ingest a single sample from a device. deviceId optional.
   async ingestSample(deviceId = 'unknown', value, timestamp = Date.now()) {

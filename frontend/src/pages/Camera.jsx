@@ -5,6 +5,7 @@ import Layout from '../components/Layout';
 
 const Camera = () => {
   const videoRef = useRef(null);
+  const streamRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [facingMode, setFacingMode] = useState('user');
   const [error, setError] = useState(null);
@@ -12,8 +13,9 @@ const Camera = () => {
   useEffect(() => {
     startCamera();
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
       }
     };
   }, [facingMode]);
@@ -25,6 +27,7 @@ const Camera = () => {
         audio: false
       };
       const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = mediaStream;
       setStream(mediaStream);
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
