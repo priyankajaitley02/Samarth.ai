@@ -4,14 +4,16 @@ import mongoose from 'mongoose';
 
 export async function ingestSignalData(req, res) {
   try {
-    const { testId, samples } = req.body;
+    const { testId, phase, samples } = req.body;
     if (!testId || !samples || !Array.isArray(samples)) return res.status(400).json({ success: false, message: 'testId and samples required' });
+    if (!mongoose.Types.ObjectId.isValid(testId)) return res.status(400).json({ success: false, message: 'invalid testId' });
 
+    const allowedPhases = ['baseline', 'hyperventilation', 'recovery'];
     const docs = samples.map(s => ({
-      testId: mongoose.Types.ObjectId(testId),
+      testId: new mongoose.Types.ObjectId(testId),
       timestamp: s.timestamp || Date.now(),
+      phase: allowedPhases.includes(phase) ? phase : undefined,
       eeg: s.eeg || []
-      // Only EEG data is stored; ECG and HR are ignored
     }));
 
     await SignalFrame.insertMany(docs);

@@ -1,7 +1,8 @@
+import neuroService from '../services/neuroService.js';
 import EpilepsyTest from '../models/EpilepsyTest.js';
 import SignalFrame from '../models/SignalFrame.js';
 import HyperventilationAssessment from '../models/HyperventilationAssessment.js';
-import { flushPendingSaves } from './hyperventilationWebSocket.js';
+import { flushPendingSaves, setActivePhase } from './hyperventilationWebSocket.js';
 import mongoose from 'mongoose';
 
 // Function to calculate EEG band powers from raw data
@@ -191,6 +192,7 @@ export async function phaseAction(req, res) {
 
     if (action === 'start') {
       t.phases.push({ phaseName: phase, startTime: timestamp ? new Date(timestamp) : new Date() });
+      setActivePhase(testId, phase);
     } else if (action === 'end') {
       // find last phase entry with this phaseName missing endTime
       for (let i = t.phases.length - 1; i >= 0; i--) {
@@ -199,6 +201,8 @@ export async function phaseAction(req, res) {
           break;
         }
       }
+      neuroService.flushPending();
+      setActivePhase(testId, null);
     }
     await t.save();
     return res.json({ success: true });
@@ -210,7 +214,7 @@ export async function phaseAction(req, res) {
 
 export async function completeTest(req, res) {
   try {
-    const { testId } = req.body;
+    const { testId, userId } = req.body;
     if (!testId) return res.status(400).json({ success: false, message: 'testId required' });
     
     console.log('[completeTest] Starting analysis for testId:', testId);
@@ -218,31 +222,42 @@ export async function completeTest(req, res) {
     const t = await EpilepsyTest.findById(testId);
     if (!t) return res.status(404).json({ success: false, message: 'Test not found' });
 
+    if (!t.userId && userId && mongoose.Types.ObjectId.isValid(userId)) {
+      t.userId = userId;
+    }
+
+    const now = new Date();
+    for (const p of t.phases) {
+      if (p.startTime && !p.endTime) p.endTime = now;
+    }
+    neuroService.flushPending();
+    setActivePhase(testId, null);
+    await t.save();
     await flushPendingSaves();
     
     console.log('[completeTest] Test found with', t.phases.length, 'phases');
 
+    const savedFrames = await SignalFrame.find({ testId: t._id }).select('eeg timestamp phase');
+    console.log('[completeTest] Saved frames for test:', savedFrames.length);
+
     const phaseAnalysis = {};
     const allPhaseData = {};
     const frameCountByPhase = {};
+    const TOLERANCE_MS = 2000;
 
     for (const p of t.phases) {
       if (!p.startTime || !p.endTime) {
         console.warn('[completeTest] Phase', p.phaseName, 'missing start or end time, skipping');
         continue;
       }
-      
-      const TOLERANCE_MS = 2000;
+
       const startTime = p.startTime.getTime() - TOLERANCE_MS;
       const endTime = p.endTime.getTime() + TOLERANCE_MS;
-      
-      console.log('[completeTest] Querying frames for phase:', p.phaseName, 
-        'from', new Date(startTime).toISOString(), 'to', new Date(endTime).toISOString());
-      
-      const frames = await SignalFrame.find({
-        testId: t._id,
-        timestamp: { $gte: startTime, $lte: endTime }
-      }).select('eeg timestamp');
+      const frames = savedFrames.filter((frame) => {
+        if (frame.phase === p.phaseName) return true;
+        if (frame.phase) return false;
+        return frame.timestamp >= startTime && frame.timestamp <= endTime;
+      });
       
       frameCountByPhase[p.phaseName] = frames.length;
       console.log('[completeTest] Found', frames.length, 'frames for phase:', p.phaseName);
@@ -299,6 +314,7 @@ export async function completeTest(req, res) {
         debug: {
           testId,
           phasesInTest: t.phases.length,
+          savedFrames: savedFrames.length,
           framesFoundPerPhase: frameCountByPhase
         }
       });

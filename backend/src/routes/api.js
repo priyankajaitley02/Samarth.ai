@@ -22,6 +22,11 @@ router.get('/specialized-assessments/neck-mobility/baseline/:userId', neckMobili
 
 router.post('/email/send-report', sendReportEmail);
 
+// Hyperventilation routes must be registered before /tests/:test_id/complete.
+// Otherwise "hyperventilation" is captured as a word-list test id and End Test
+// is rejected with "No authentication token, authorization denied".
+router.use('/tests/hyperventilation', hyperventilationTestRoutes);
+
 // Tests (word list) routes
 router.post('/tests/start', auth, express.json(), startTest);
 
@@ -44,8 +49,5 @@ router.use('/', neuroRoutes);
 
 // Disorder questionnaire routes
 router.use('/disorders', disorderQuestionnaireRoutes);
-
-// Hyperventilation test routes (standalone test module)
-router.use('/tests/hyperventilation', hyperventilationTestRoutes);
 
 export default router;

@@ -10,6 +10,13 @@ const DEFAULT_SAMPLING_RATE = process.env.NEURO_SAMPLING_RATE ? Number(process.e
 const DEFAULT_SERIAL_PORT = process.env.NEURO_SERIAL_PORT || null;
 const DEFAULT_BAUD = process.env.NEURO_BAUD ? Number(process.env.NEURO_BAUD) : 115200;
 
+function normalizeEpochMs(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return Date.now();
+  if (Math.abs(n - Date.now()) < 1000 * 60 * 60 * 48) return n;
+  return Date.now();
+}
+
 function computeBandPowers(windowSamples, sampleRate) {
   // windowSamples: array of EEG samples
   const N = windowSamples.length;
@@ -90,6 +97,8 @@ class NeuroService extends EventEmitter {
     this.currentSession = null; // in-memory session state
     this.eegBuffer = [];
     this.ecgBuffer = [];
+    this.eegEmitted = 0;
+    this.ecgEmitted = 0;
     this.rrAll = [];
     this.bandSums = { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 };
     this.bandCount = 0;
@@ -137,6 +146,8 @@ class NeuroService extends EventEmitter {
 
     this.eegBuffer = [];
     this.ecgBuffer = [];
+    this.eegEmitted = 0;
+    this.ecgEmitted = 0;
     this.rrAll = [];
     this.bandSums = { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 };
     this.bandCount = 0;
@@ -258,7 +269,7 @@ class NeuroService extends EventEmitter {
         if (typeof obj.ppg !== 'undefined' && (ecgVal === null || isNaN(ecgVal))) {
           ecgVal = Number(obj.ppg);
         }
-        if (obj.timestamp) ts = Number(obj.timestamp);
+        if (obj.timestamp) ts = normalizeEpochMs(obj.timestamp);
       } else {
         const parts = trimmed.split(',').map(p => p.trim());
         // Support formats:
@@ -271,9 +282,9 @@ class NeuroService extends EventEmitter {
           const a = Number(parts[0]);
           const b = Number(parts[1]);
           // heuristics: timestamp will be large (ms), eeg small (ADC)
-          if (b > 100000) {
+          if (b > 1e11) {
             eegVal = a;
-            ts = b;
+            ts = normalizeEpochMs(b);
           } else {
             // assume second is ecg/ppg sample
             eegVal = a;
@@ -282,7 +293,7 @@ class NeuroService extends EventEmitter {
         } else if (parts.length >= 3) {
           eegVal = Number(parts[0]);
           ecgVal = Number(parts[1]);
-          if (parts[2]) ts = Number(parts[2]);
+          if (parts[2]) ts = normalizeEpochMs(parts[2]);
         }
       }
     } catch (e) {
@@ -291,10 +302,35 @@ class NeuroService extends EventEmitter {
 
     if (eegVal !== null && !isNaN(eegVal)) this.eegBuffer.push(eegVal);
     if (ecgVal !== null && !isNaN(ecgVal)) this.ecgBuffer.push(ecgVal);
+    this.lastSampleAt = normalizeEpochMs(ts);
+    this._publishIfReady(false);
+  }
 
-    // accumulate realtime raw data periodically (compressed): every 250 samples
-    if (this.eegBuffer.length >= Math.max(64, Math.floor(this.sampleRate * 0.25))) {
-      // compute band powers on last window
+  flushPending() {
+    this._publishIfReady(true);
+  }
+
+  _publishIfReady(force) {
+    const minBatch = force ? 1 : 32;
+    const newEegCount = this.eegBuffer.length - this.eegEmitted;
+    // Publish each new sample once. Band power still uses the recent window.
+    if (newEegCount >= minBatch) {
+      const newEeg = this.eegBuffer.slice(this.eegEmitted);
+      const newEcg = this.ecgBuffer.slice(this.ecgEmitted);
+      this.eegEmitted = this.eegBuffer.length;
+      this.ecgEmitted = this.ecgBuffer.length;
+      const maxKeep = Math.max(64, Math.floor(this.sampleRate * 2));
+      if (this.eegBuffer.length > maxKeep) {
+        const drop = this.eegBuffer.length - maxKeep;
+        this.eegBuffer.splice(0, drop);
+        this.eegEmitted -= drop;
+      }
+      if (this.ecgBuffer.length > maxKeep) {
+        const drop = this.ecgBuffer.length - maxKeep;
+        this.ecgBuffer.splice(0, drop);
+        this.ecgEmitted -= drop;
+      }
+
       const window = this.eegBuffer.slice(-Math.floor(this.sampleRate * 2)); // 2s window
       const bands = computeBandPowers(window, this.sampleRate);
       // update running averages
@@ -317,16 +353,16 @@ class NeuroService extends EventEmitter {
         const slope = Math.abs(recent[i] - recent[i - 1]);
         if (recent[i] > threshold && slope > std * 2) {
           spikeDetected = true;
-          spikeInfo = { timestamp: ts, amplitude: recent[i], duration: 0 };
+          spikeInfo = { timestamp: this.lastSampleAt, amplitude: recent[i], duration: 0 };
           if (this.currentSession) this.currentSession.spikes.push(spikeInfo);
           break;
         }
       }
 
       const payload = {
-        timestamp: ts,
-        eeg_raw: recent.slice(-64),
-        ecg_raw: this.ecgBuffer.slice(-64),
+        timestamp: this.lastSampleAt || Date.now(),
+        eeg_raw: newEeg,
+        ecg_raw: newEcg,
         bands,
         hr,
         hrv: computeHRVStats(this.rrAll).rmssd,
@@ -338,7 +374,7 @@ class NeuroService extends EventEmitter {
 
       // persist compressed raw sample set for session (async, non-blocking)
       if (this.currentSession) {
-        RealTimeRawData.create({ sessionId: this.currentSession.id, timestamp: ts, eeg_raw: payload.eeg_raw, ecg_raw: payload.ecg_raw }).catch(() => { /* ignore */ });
+        RealTimeRawData.create({ sessionId: this.currentSession.id, timestamp: payload.timestamp, eeg_raw: payload.eeg_raw, ecg_raw: payload.ecg_raw }).catch(() => { /* ignore */ });
       }
     }
   }

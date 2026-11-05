@@ -2,14 +2,33 @@
 import SignalFrame from '../models/SignalFrame.js';
 import mongoose from 'mongoose';
 
-const wsClients = new Map(); // Map of ws -> {testId, ws}
+const wsClients = new Map(); // Map of ws -> {testId, ws, phase}
+const activePhaseByTest = new Map();
 const pendingSaves = new Set();
+let savedFrameCount = 0;
+
+function epochTimestamp(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return Date.now();
+  // Accept timestamps that are already wall-clock milliseconds.
+  if (Math.abs(n - Date.now()) < 1000 * 60 * 60 * 48) return n;
+  return Date.now();
+}
+
+export function setActivePhase(testId, phase) {
+  const key = String(testId || '');
+  if (!key) return;
+  if (phase) activePhaseByTest.set(key, phase);
+  else activePhaseByTest.delete(key);
+  for (const meta of wsClients.values()) {
+    if (String(meta.testId) === key) meta.phase = phase || null;
+  }
+}
 
 export function addClient(ws, testId) {
-  console.log('HV WS client connected with testId:', testId);
-   console.log('[addClient] testId type:', typeof testId, 'length:', testId?.length, 'value:', JSON.stringify(testId));
-   console.log('[addClient] Total clients after add:', wsClients.size + 1);
-  wsClients.set(ws, { testId, ws });
+  const phase = activePhaseByTest.get(String(testId)) || null;
+  console.log('HV WS client connected with testId:', testId, 'phase:', phase);
+  wsClients.set(ws, { testId, ws, phase });
   ws.on('close', () => {
     wsClients.delete(ws);
     console.log('HV WS client disconnected, remaining clients:', wsClients.size);
@@ -19,24 +38,24 @@ export function addClient(ws, testId) {
 
 export function broadcast(payload) {
   const str = JSON.stringify(payload);
-    console.log('[hvWs.broadcast] Called with clients:', wsClients.size, 'has eeg_raw:', !!payload.eeg_raw, 'timestamp:', payload.timestamp);
-  
-  for (const [ws, { testId }] of wsClients) {
-      console.log('[hvWs.broadcast] Processing client, testId:', testId);
+  const samples = Array.isArray(payload.eeg_raw)
+    ? payload.eeg_raw.filter(sample => Number.isFinite(Number(sample))).map(Number)
+    : [];
+  const receivedAt = epochTimestamp(payload.timestamp);
+  const savedForTest = new Set();
+
+  for (const [ws, meta] of wsClients) {
+    const { testId, phase } = meta;
+    if (testId && samples.length > 0 && !savedForTest.has(String(testId))) {
+      savedForTest.add(String(testId));
+      const save = saveSignalFrame(testId, samples, receivedAt, phase);
+      pendingSaves.add(save);
+      save.catch(err => {
+        console.error('Error saving signal frame for HV test:', err);
+      }).finally(() => pendingSaves.delete(save));
+    }
     try {
       ws.send(str);
-      
-      // Also save EEG data to database if testId is set
-      if (testId && Array.isArray(payload.eeg_raw)) {
-        const samples = payload.eeg_raw.filter(sample => Number.isFinite(Number(sample))).map(Number);
-        if (samples.length > 0) {
-          const save = saveSignalFrame(testId, samples, payload.timestamp);
-          pendingSaves.add(save);
-          save.catch(err => {
-            console.error('Error saving signal frame for HV test:', err);
-          }).finally(() => pendingSaves.delete(save));
-        }
-      }
     } catch (e) {
       try { ws.terminate(); } catch (e2) {}
       wsClients.delete(ws);
@@ -44,28 +63,23 @@ export function broadcast(payload) {
   }
 }
 
-async function saveSignalFrame(testId, eegData, timestamp) {
-    console.log('[saveSignalFrame] START - testId:', testId, 'eegData length:', eegData?.length, 'timestamp:', timestamp);
+async function saveSignalFrame(testId, eegData, timestamp, phase) {
   try {
-    if (!testId) {
-      console.error('[saveSignalFrame] CRITICAL: testId is null/undefined, frame will NOT be saved!');
-      console.error('[saveSignalFrame] This means frames cannot be retrieved later. Check WebSocket connection.');
+    if (!testId || typeof testId !== 'string' || testId.length !== 24) {
+      console.error('[saveSignalFrame] Invalid testId, frame not saved:', testId);
       return;
     }
-    
-    if (typeof testId !== 'string' || testId.length !== 24) {
-      console.error('[saveSignalFrame] Invalid testId format:', testId, 'type:', typeof testId);
-      return;
-    }
-    
     const frame = new SignalFrame({
       testId: new mongoose.Types.ObjectId(testId),
-      timestamp: timestamp || Date.now(),
+      timestamp: epochTimestamp(timestamp),
+      ...(phase ? { phase } : {}),
       eeg: eegData
     });
     await frame.save();
-    
-      console.log('[saveSignalFrame] ✓✓✓ SUCCESS - Saved frame for testId:', testId, 'samples:', eegData.length, 'timestamp:', timestamp);
+    savedFrameCount += 1;
+    if (savedFrameCount === 1 || savedFrameCount % 25 === 0) {
+      console.log('[saveSignalFrame] Saved', savedFrameCount, 'frames. Latest phase:', phase, 'samples:', eegData.length);
+    }
   } catch (err) {
     console.error('[saveSignalFrame] Failed to save signal frame:', err.message, 'testId:', testId);
   }

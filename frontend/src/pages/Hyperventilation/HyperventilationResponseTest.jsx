@@ -100,7 +100,8 @@ const HyperventilationResponseTest = ({ userId: propUserId } = {}) => {
   const stopTest = async () => {
     try {
       setLoadingResults(true);
-      const resp = await fetch('/api/tests/hyperventilation/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ testId }) });
+      const actualUserId = propUserId || (user && user.id) || undefined;
+      const resp = await fetch('/api/tests/hyperventilation/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ testId, userId: actualUserId }) });
       const json = await resp.json();
       console.log('Complete test response:', { status: resp.status, ok: resp.ok, json });
       
@@ -149,6 +150,11 @@ const HyperventilationResponseTest = ({ userId: propUserId } = {}) => {
           <Box>
             <Typography variant="h6">Phase: {DEFAULT_PHASES[phaseIndex].name}</Typography>
             <Typography>Time remaining: {new Date(countdown * 1000).toISOString().substr(14, 5)}</Typography>
+            <Typography sx={{ mt: 1 }} color={runningPhase ? 'success.main' : 'text.secondary'}>
+              {runningPhase
+                ? `Saving the electrode waveform for this phase. ${eegData.length} samples captured.`
+                : 'The live waveform is stored when you press Start Phase. End Test then builds the report from those saved samples.'}
+            </Typography>
             {DEFAULT_PHASES[phaseIndex].name === 'hyperventilation' && (
               <Box sx={{ mt: 2 }}>
                 <Typography variant="h5" color="error">Breathe deeply and rapidly for the next {timers[phaseIndex]} seconds</Typography>
