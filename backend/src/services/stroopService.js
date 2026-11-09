@@ -7,13 +7,16 @@ export const stroopService = {
         throw new Error('Missing required field: userId');
       }
 
-      // Ensure history is an array
       const history = Array.isArray(assessmentData.history) ? assessmentData.history : (assessmentData.history ? [assessmentData.history] : []);
-
-      // Compute basic metrics if not provided
-      const total = assessmentData.total || history.length || 0;
-      const score = typeof assessmentData.score === 'number' ? assessmentData.score : history.reduce((acc, h) => acc + (h.correct ? 1 : 0), 0);
-      const accuracy = total > 0 ? (score / total) : (assessmentData.accuracy || 0);
+      const validResponses = history.filter(response => typeof response.correct === 'boolean');
+      const hasResponseHistory = assessmentData.history !== undefined && assessmentData.history !== null;
+      const total = hasResponseHistory
+        ? validResponses.length
+        : Math.max(0, Number(assessmentData.total) || 0);
+      const score = hasResponseHistory
+        ? validResponses.filter(response => response.correct).length
+        : Math.min(total, Math.max(0, Number(assessmentData.score) || 0));
+      const accuracy = total > 0 ? score / total : 0;
 
       const assessment = new StroopAssessment({
         userId: assessmentData.userId,

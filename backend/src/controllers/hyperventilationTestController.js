@@ -165,16 +165,12 @@ function generateClinicalIndicators(baselineData, hvData, recoveryData) {
 
 export async function startTest(req, res) {
   try {
-    const { userId } = req.body;
-    const payload = { testType: 'hyperventilation', startedAt: new Date(), status: 'in-progress' };
-    if (userId) {
-      try {
-        payload.userId = new mongoose.Types.ObjectId(userId);
-      } catch (e) {
-        // fallback to raw value if casting fails
-        payload.userId = userId;
-      }
-    }
+    const payload = {
+      userId: new mongoose.Types.ObjectId(req.user._id),
+      testType: 'hyperventilation',
+      startedAt: new Date(),
+      status: 'in-progress'
+    };
     const doc = await EpilepsyTest.create(payload);
     return res.json({ success: true, testId: doc._id });
   } catch (err) {
@@ -189,6 +185,9 @@ export async function phaseAction(req, res) {
     if (!testId || !phase || !action) return res.status(400).json({ success: false, message: 'testId, phase and action required' });
     const t = await EpilepsyTest.findById(testId);
     if (!t) return res.status(404).json({ success: false, message: 'Test not found' });
+    if (t.userId?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ success: false, message: 'You can only update your own test' });
+    }
 
     if (action === 'start') {
       t.phases.push({ phaseName: phase, startTime: timestamp ? new Date(timestamp) : new Date() });
@@ -214,16 +213,15 @@ export async function phaseAction(req, res) {
 
 export async function completeTest(req, res) {
   try {
-    const { testId, userId } = req.body;
+    const { testId } = req.body;
     if (!testId) return res.status(400).json({ success: false, message: 'testId required' });
     
     console.log('[completeTest] Starting analysis for testId:', testId);
     
     const t = await EpilepsyTest.findById(testId);
     if (!t) return res.status(404).json({ success: false, message: 'Test not found' });
-
-    if (!t.userId && userId && mongoose.Types.ObjectId.isValid(userId)) {
-      t.userId = userId;
+    if (t.userId?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ success: false, message: 'You can only complete your own test' });
     }
 
     const now = new Date();
@@ -397,7 +395,7 @@ export async function completeTest(req, res) {
       const totalSpikes = baselineMetrics.spikes + hvMetrics.spikes + recoveryMetrics.spikes;
       const riskLevel = totalSpikes > 10 ? 'high' : totalSpikes > 5 ? 'moderate' : 'low';
 
-      const assessment = new HyperventilationAssessment({
+      const assessmentData = {
         userId: t.userId,
         testId: t._id,
         timestamp: new Date(),
@@ -431,13 +429,17 @@ export async function completeTest(req, res) {
             abnormalityDetected: riskLevel !== 'low'
           }
         }
-      });
+      };
 
       if (!t.userId) {
         throw new Error('Test is missing the user ID required to save the assessment');
       }
 
-      await assessment.save();
+      const assessment = await HyperventilationAssessment.findOneAndUpdate(
+        { testId: t._id },
+        { $set: assessmentData },
+        { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+      );
       console.log('[completeTest] HyperventilationAssessment saved:', assessment._id);
     } catch (assessmentErr) {
       console.error('[completeTest] Error saving HyperventilationAssessment:', assessmentErr.message);
@@ -465,6 +467,9 @@ export async function getTest(req, res) {
     const { testId } = req.params;
     const t = await EpilepsyTest.findById(testId);
     if (!t) return res.status(404).json({ success: false, message: 'Not found' });
+    if (t.userId?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ success: false, message: 'You can only access your own test' });
+    }
     return res.json({ success: true, test: t });
   } catch (err) {
     console.error('getTest error', err);

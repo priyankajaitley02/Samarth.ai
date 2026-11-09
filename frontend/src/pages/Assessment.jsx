@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   Box, 
   Typography, 
@@ -34,6 +34,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
+import { completeAssessment } from './assessmentCompletion';
 
 // Import assessment components
 import EyeMovement from '../components/assessments/EyeMovement/EyeMovementTest';
@@ -62,11 +63,6 @@ const Assessment = () => {
   const [selectedDisorder, setSelectedDisorder] = useState(null);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-
-  // Helper to check if all assessments are completed
-  const checkAllAssessmentsCompleted = useCallback((completed, types) => {
-    return types.every(assessment => completed.includes(assessment.id));
-  }, []);
 
   // Load completed assessments from localStorage on component mount
   useEffect(() => {
@@ -330,60 +326,21 @@ const Assessment = () => {
     }
   };
 
-  const stopAssessment = async (metrics) => {
-    const assessmentData = {
-      type: currentAssessment,
-      timestamp: new Date().toISOString(),
-      metrics,
-      userId: user.id || user._id || user.uid
-    };
-    
-    try {
-      // Send assessment data to backend
-      const result = await assessmentService.saveAssessment(
-        assessmentData.userId, 
-        assessmentData.type, 
-        assessmentData.metrics
-      );
-      console.log('Assessment saved to DB:', result);
-      
-      // Mark current assessment as completed
-      const updatedCompletedAssessments = [...completedAssessments];
-      if (!updatedCompletedAssessments.includes(currentAssessment)) {
-        updatedCompletedAssessments.push(currentAssessment);
-      }
-      
-      // Save to localStorage
-      localStorage.setItem(
-        `completed_assessments_${user.id}`,
-        JSON.stringify(updatedCompletedAssessments)
-      );
-      
-      setCompletedAssessments(updatedCompletedAssessments);
-      
-      // Check if all relevant assessments are completed
-      const relevantTypes = selectedDisorder ? filteredAssessmentTypes : assessmentTypes;
-      if (checkAllAssessmentsCompleted(updatedCompletedAssessments, relevantTypes)) {
-        // All assessments completed - reset for next time and navigate to dashboard
-        localStorage.setItem(`new_assessment_session_${user.id}`, 'true');
-        navigate('/dashboard');
-        return;
-      }
+  const stopAssessment = () => {
+    if (!currentAssessment) return;
+    const completion = completeAssessment(currentAssessment, completedAssessments);
 
-      // Find the next assessment that isn't completed yet within the relevant set
-      const currentIndex = relevantTypes.findIndex(a => a.id === currentAssessment);
-      const nextIndex = currentIndex + 1;
+    localStorage.setItem(
+      `completed_assessments_${user.id}`,
+      JSON.stringify(completion.completedAssessments)
+    );
 
-      if (nextIndex < relevantTypes.length) {
-        // Automatically navigate to the next assessment in the filtered list
-        setCurrentAssessment(relevantTypes[nextIndex].id);
-      } else {
-        // All relevant assessments completed
-        setCurrentAssessment(null);
-      }
-    } catch (error) {
-      console.error('Error saving assessment:', error);
-      setCurrentAssessment(null);
+    setCompletedAssessments(completion.completedAssessments);
+    setCurrentAssessment(completion.currentAssessment);
+
+    const relevantTypes = selectedDisorder ? filteredAssessmentTypes : assessmentTypes;
+    if (relevantTypes.every(assessment => completion.completedAssessments.includes(assessment.id))) {
+      localStorage.setItem(`new_assessment_session_${user.id}`, 'true');
     }
   };
 
@@ -469,12 +426,9 @@ const Assessment = () => {
             </Box>
           </Box>
           
-          <AssessmentComponent 
+          <AssessmentComponent
             userId={user.id || user._id || user.uid}
-            onComplete={(data) => stopAssessment({
-              ...data,
-              assessmentType: assessment.id
-            })}
+            onComplete={stopAssessment}
           />
         </Paper>
       </MotionContainer>

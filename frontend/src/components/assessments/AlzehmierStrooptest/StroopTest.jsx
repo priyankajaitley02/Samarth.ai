@@ -103,8 +103,6 @@ const StroopTest = ({ userId, onComplete }) => {
     } catch (error) {
       console.error('Error saving stroop assessment:', error);
       setSaveStatus({ saving: false, error: error.message, success: false });
-      // still call onComplete so parent can handle skip/failure if provided
-      if (onComplete) onComplete(payload);
       return null;
     }
   };

@@ -213,10 +213,10 @@ export const assessmentService = {
 // Update the specialized assessments API path to match your endpoints
 export const specializedAssessments = {
   neckMobility: {
-    save: (data) => axios.post('/api/specialized-assessments/neck-mobility', data),
-    getHistory: (userId, limit = 10) => axios.get(`/api/specialized-assessments/neck-mobility/history?userId=${userId}&limit=${limit}`),
-    getBaseline: (userId) => axios.get(`/api/specialized-assessments/neck-mobility/baseline/${userId}`),
-    complete: (formData) => axios.post('/api/specialized-assessments/neck-mobility/complete', formData, {
+    save: (data) => api.post('/specialized-assessments/neck-mobility', data),
+    getHistory: (userId, limit = 10) => api.get('/specialized-assessments/neck-mobility/history', { params: { userId, limit } }),
+    getBaseline: (userId) => api.get(`/specialized-assessments/neck-mobility/baseline/${userId}`),
+    complete: (formData) => api.post('/specialized-assessments/neck-mobility/complete', formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
       }

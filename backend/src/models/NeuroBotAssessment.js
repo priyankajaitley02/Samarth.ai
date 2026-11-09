@@ -10,6 +10,9 @@ const neuroBotAssessmentSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  sessionId: {
+    type: String
+  },
   type: {
     type: String,
     default: 'neurobot'
@@ -40,6 +43,11 @@ const neuroBotAssessmentSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+neuroBotAssessmentSchema.index(
+  { userId: 1, sessionId: 1 },
+  { unique: true, partialFilterExpression: { sessionId: { $type: 'string' } } }
+);
 
 const NeuroBotAssessment = mongoose.model('NeuroBotAssessment', neuroBotAssessmentSchema);
 

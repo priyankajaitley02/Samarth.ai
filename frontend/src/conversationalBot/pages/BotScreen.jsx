@@ -227,11 +227,15 @@ export default function BotScreen({ onComplete, userId }) {
   };
 
   const handleFinish = () => {
+    if (!reportData?.assessmentId) {
+      return;
+    }
+
     if(onComplete) {
-        // Pass back metrics and report for persistence in Assessment collection
         onComplete({ 
             completed: true, 
             sessionId,
+            assessmentId: reportData.assessmentId,
             riskLevel: reportData?.report?.riskLevel || 'Unknown',
             summary: reportData?.report?.summary || '',
             recommendations: reportData?.report?.recommendations || [],
@@ -375,6 +379,11 @@ export default function BotScreen({ onComplete, userId }) {
                              'This is a fallback notice, not an AI-generated assessment.'}
                          </Alert>
                        )}
+                       {!reportData.assessmentId && (
+                         <Alert severity="error" sx={{ mb: 2 }}>
+                           This report could not be confirmed as saved. Please try again later; it will not be marked as completed.
+                         </Alert>
+                       )}
                        <Typography variant="h5" gutterBottom sx={{ fontWeight: 'bold', color: 'primary.main', textAlign: 'center' }}>
                          {language === 'hi' ? 'मूल्यांकन रिपोर्ट' : 'Assessment Report'}
                        </Typography>
@@ -409,6 +418,7 @@ export default function BotScreen({ onComplete, userId }) {
                             color="primary" 
                             startIcon={<CheckCircle />}
                             onClick={handleFinish}
+                            disabled={!reportData.assessmentId}
                             sx={{ borderRadius: 8 }}
                            >
                              Done

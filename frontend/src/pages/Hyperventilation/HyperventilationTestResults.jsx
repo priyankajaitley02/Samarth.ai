@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Paper,
@@ -21,69 +21,19 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions,
-  CircularProgress,
-  Snackbar
+  DialogActions
 } from '@mui/material';
 import {
   WarningAmber as WarningIcon,
   CheckCircle as CheckCircleIcon,
   Info as InfoIcon,
   Download as DownloadIcon,
-  Save as SaveIcon
 } from '@mui/icons-material';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { useAuth } from '../../contexts/AuthContext';
-import hyperventilationService from '../../services/hyperventilationService.js';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
-const HyperventilationTestResults = ({ summary, testId }) => {
-  const { user, loading: authLoading } = useAuth();
+const HyperventilationTestResults = ({ summary }) => {
   const [activeTab, setActiveTab] = useState(0);
   const [printDialogOpen, setPrintDialogOpen] = useState(false);
-  const [savingToAssessments, setSavingToAssessments] = useState(false);
-  const [snackbarOpen, setSnackbarOpen] = useState(false);
-  const [snackbarMessage, setSnackbarMessage] = useState('');
-  const [snackbarSeverity, setSnackbarSeverity] = useState('success');
-
-  const saveAttemptedRef = React.useRef(false);
-
-  const handleSaveToAssessments = useCallback(async () => {
-    if (!user || !user.id) {
-      setSnackbarMessage('User not authenticated');
-      setSnackbarSeverity('error');
-      setSnackbarOpen(true);
-      return;
-    }
-
-    setSavingToAssessments(true);
-    try {
-      await hyperventilationService.saveTestToAssessments(user.id, testId, summary);
-      setSnackbarMessage('Test results saved to assessments');
-      setSnackbarSeverity('success');
-      setSnackbarOpen(true);
-    } catch (error) {
-      console.error('Error saving to assessments:', error);
-      setSnackbarMessage('Failed to save results to assessments');
-      setSnackbarSeverity('error');
-      setSnackbarOpen(true);
-    } finally {
-      setSavingToAssessments(false);
-    }
-  }, [summary, testId, user]);
-
-  useEffect(() => {
-    if (authLoading || !summary || saveAttemptedRef.current) return;
-
-    if (!user?.id) {
-      setSnackbarMessage('User is not authenticated');
-      setSnackbarSeverity('error');
-      setSnackbarOpen(true);
-      return;
-    }
-
-    saveAttemptedRef.current = true;
-    handleSaveToAssessments();
-  }, [authLoading, handleSaveToAssessments, summary, testId, user]);
 
   if (!summary) {
     return (
@@ -128,14 +78,6 @@ const HyperventilationTestResults = ({ summary, testId }) => {
     phase,
     spikes: phaseAnalysis[phase].abnormalities.spikeCount,
     slowing: phaseAnalysis[phase].abnormalities.slowingIndicator
-  }));
-
-  // Prepare amplitude data
-  const amplitudeData = Object.keys(phaseAnalysis).map(phase => ({
-    phase,
-    mean: phaseAnalysis[phase].amplitude.mean,
-    max: phaseAnalysis[phase].amplitude.max,
-    min: phaseAnalysis[phase].amplitude.min
   }));
 
   const handlePrint = () => {
@@ -378,14 +320,7 @@ const HyperventilationTestResults = ({ summary, testId }) => {
         >
           Download Report (PDF)
         </Button>
-        <Button
-          variant="outlined"
-          startIcon={savingToAssessments ? <CircularProgress size={20} /> : <SaveIcon />}
-          onClick={handleSaveToAssessments}
-          disabled={savingToAssessments}
-        >
-          {savingToAssessments ? 'Saving...' : 'Save to Assessments'}
-        </Button>
+        <Typography color="text.secondary">Results are saved to Assessment Results when the test completes.</Typography>
       </Box>
 
       {/* Print Dialog */}
@@ -404,14 +339,6 @@ const HyperventilationTestResults = ({ summary, testId }) => {
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar for notifications */}
-      <Snackbar
-        open={snackbarOpen}
-        autoHideDuration={4000}
-        onClose={() => setSnackbarOpen(false)}
-        message={snackbarMessage}
-        severity={snackbarSeverity}
-      />
     </Box>
   );
 };

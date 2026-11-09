@@ -29,12 +29,11 @@ import BarChartIcon from "@mui/icons-material/BarChart";
 import TroubleshootIcon from "@mui/icons-material/Troubleshoot";
 import { useAuth } from "../contexts/AuthContext";
 import WelcomeDashboard from "../components/analytics/WelcomeDashboard";
-import { seedIfNoAssessments } from "../utils/seedTestData";
 import DebugPanel from '../components/shared/DebugPanel';
 
 const Analytics = () => {
   const { user } = useAuth();
-  const userId = user?.id;
+  const userId = user?.id || user?._id;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -47,7 +46,6 @@ const Analytics = () => {
   const [sortBy, setSortBy] = useState("date-desc");
   const [sortAnchorEl, setSortAnchorEl] = useState(null);
   const [filterAnchorEl, setFilterAnchorEl] = useState(null);
-  const [seeding, setSeeding] = useState(false);
 
   // Get assessment type counts for export panel
   const getAssessmentTypes = useCallback(() => {
@@ -142,23 +140,6 @@ const Analytics = () => {
     return typeMap[type] || typeMap[type.toLowerCase()] || type;
   };
 
-  // Handle seeding test data
-  const handleSeedTestData = async () => {
-    if (!userId) return;
-
-    setSeeding(true);
-    try {
-      await seedTestAssessments(userId);
-      // Refresh the data after seeding
-      await fetchData();
-    } catch (error) {
-      console.error("Error seeding test data:", error);
-      setError("Failed to seed test data. Please try again.");
-    } finally {
-      setSeeding(false);
-    }
-  };
-
   // Fetch data
   const fetchData = useCallback(async () => {
     try {
@@ -173,17 +154,6 @@ const Analytics = () => {
       if (data && data.length > 0) {
         setLoading(false);
         return;
-      }
-
-      // If we're in development mode, we could automatically seed test data
-      if (import.meta.env.DEV) {
-        console.log(
-          "In development mode with no assessments, seeding test data..."
-        );
-        await seedIfNoAssessments(userId);
-        // Fetch again with the new data
-        const seededData = await fetchAllAssessments(userId);
-        setAssessments(seededData || []);
       }
 
       setLoading(false);
@@ -262,10 +232,9 @@ const Analytics = () => {
       errorMessage: error,
       assessmentCount: assessments.length,
       filteredCount: filteredAssessments.length,
-      seeding: seeding,
       lastApiCall: new Date().toISOString()
     });
-  }, [user?.id, loading, error, assessments.length, filteredAssessments.length, seeding]);
+  }, [user?.id, loading, error, assessments.length, filteredAssessments.length]);
 
   return (
     <Layout>
@@ -291,20 +260,11 @@ const Analytics = () => {
               Assessment Analytics
             </Typography>
             <Box sx={{ display: "flex", gap: 1 }}>
-              {import.meta.env.DEV && assessments.length === 0 && (
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  onClick={handleSeedTestData}
-                  disabled={loading || seeding}>
-                  {seeding ? "Seeding..." : "Seed Test Data"}
-                </Button>
-              )}
               <Button
                 variant="outlined"
                 startIcon={<RefreshIcon />}
                 onClick={handleRefresh}
-                disabled={loading || seeding}>
+                disabled={loading}>
                 Refresh
               </Button>
             </Box>

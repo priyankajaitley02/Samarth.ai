@@ -24,16 +24,6 @@ export const useEyeTracking = (userId, videoRef) => {
       if (results.success) {
         if (!mountedRef.current) return results;
 
-        // Ensure accuracy exists with a fallback value.
-        if (results.metrics && results.metrics.summary) {
-          if (
-            typeof results.metrics.summary.accuracy === 'undefined' ||
-            results.metrics.summary.accuracy === null
-          ) {
-            results.metrics.summary.accuracy = 75.0;
-          }
-        }
-
         setMetrics((prev) => ({
           ...prev,
           [phase]: results.metrics

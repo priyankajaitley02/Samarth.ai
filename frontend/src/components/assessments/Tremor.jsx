@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import api from '../../services/api.js';
 import { Box, Button, Card, CardContent, CircularProgress, Grid, Typography, Chip, Tooltip } from '@mui/material';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
@@ -132,17 +133,16 @@ const Tremor = ({ userId, onComplete }) => {
     try {
       const payload = { userId, metrics, timestamp: new Date().toISOString(), type: 'tremor' };
       if (deviceId) payload.deviceId = deviceId;
-      const res = await fetch('/api/tremor/save', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
-      const json = await res.json();
+      const { data: json } = await api.post('/tremor/save', payload);
       if (json.success) {
         addLog('Saved assessment');
         if (onComplete) onComplete(json.data);
       } else {
         addLog('Save failed: ' + (json.error || json.message || 'unknown'));
       }
-    } catch (e) { addLog('Save error'); }
+    } catch (error) {
+      addLog(`Save error: ${error.response?.data?.error || error.message}`);
+    }
   }
 
   const chartData = {

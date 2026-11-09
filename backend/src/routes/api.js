@@ -1,6 +1,4 @@
 import express from 'express';
-import { eyeMovementController } from '../controllers/eyeMovementController.js';
-import { neckMobilityController } from '../controllers/neckMobilityController.js';
 import { sendReportEmail } from '../controllers/emailController.js';
 import { startTest, uploadArtifact, completeTest, getResults, getMulterForTest, scheduleDelayedRecall, getInsights } from '../controllers/testsController.js';
 import { auth } from '../middleware/auth.js';
@@ -9,16 +7,6 @@ import disorderQuestionnaireRoutes from './disorderQuestionnaire.js';
 import hyperventilationTestRoutes from './hyperventilationTestRoutes.js';
 
 const router = express.Router();
-
-// Eye Movement routes
-router.post('/specialized-assessments/eye-movement', eyeMovementController.save);
-router.get('/specialized-assessments/eye-movement/history', eyeMovementController.getHistory);
-router.get('/specialized-assessments/eye-movement/baseline/:userId', eyeMovementController.getBaseline);
-
-// Neck Mobility routes
-router.post('/specialized-assessments/neck-mobility', neckMobilityController.save);
-router.get('/specialized-assessments/neck-mobility/history', neckMobilityController.getHistory);
-router.get('/specialized-assessments/neck-mobility/baseline/:userId', neckMobilityController.getBaseline);
 
 router.post('/email/send-report', sendReportEmail);
 

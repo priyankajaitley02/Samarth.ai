@@ -1,6 +1,4 @@
-import axios from 'axios';
-
-const API_BASE_URL = 'http://localhost:5000/api/neurobot';
+import api from '../../services/api.js';
 
 /**
  * Starts a new conversational session.
@@ -8,7 +6,7 @@ const API_BASE_URL = 'http://localhost:5000/api/neurobot';
  */
 export const startBotSession = async (userId) => {
   try {
-    const response = await axios.post(`${API_BASE_URL}/start`, { userId });
+    const response = await api.post('/neurobot/start', { userId });
     return response.data;
   } catch (error) {
     console.error("Error starting bot session:", error);
@@ -24,7 +22,7 @@ export const startBotSession = async (userId) => {
  */
 export const sendBotAnswer = async (sessionId, answer) => {
   try {
-    const response = await axios.post(`${API_BASE_URL}/answer`, {
+    const response = await api.post('/neurobot/answer', {
       sessionId,
       answer
     });
@@ -44,11 +42,7 @@ export const uploadAudio = async (audioBlob) => {
     const formData = new FormData();
     formData.append('audio', audioBlob, 'audio.webm'); // 'audio.webm' or .mp3 depending on recorder
 
-    const response = await axios.post(`${API_BASE_URL}/stt`, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    });
+    const response = await api.post('/neurobot/stt', formData);
     return response.data.text;
   } catch (error) {
     console.error("Error uploading audio for STT:", error);
@@ -63,7 +57,7 @@ export const uploadAudio = async (audioBlob) => {
  */
 export const getBotReport = async (sessionId) => {
     try {
-        const response = await axios.post(`${API_BASE_URL}/report`, { sessionId });
+        const response = await api.post('/neurobot/report', { sessionId });
         return response.data;
     } catch (error) {
         console.error("Error fetching report:", error);

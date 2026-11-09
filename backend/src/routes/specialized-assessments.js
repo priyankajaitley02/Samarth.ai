@@ -8,8 +8,18 @@ import { gaitAnalysisController } from '../controllers/gaitAnalysisController.js
 import { fingerTappingController } from '../controllers/fingerTappingController.js';
 import { speechPatternController } from '../controllers/speechPatternController.js';
 import { stroopController } from '../controllers/stroopController.js';
+import { auth } from '../middleware/auth.js';
 
 const router = express.Router();
+
+router.use(auth);
+router.use((req, res, next) => {
+  const userId = req.user._id.toString();
+  req.body = { ...(req.body || {}), userId };
+  req.query.userId = userId;
+  if (req.params.userId) req.params.userId = userId;
+  next();
+});
 
 // Eye Movement routes
 router.post('/eye-movement', eyeMovementController.save);

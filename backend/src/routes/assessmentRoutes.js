@@ -5,13 +5,13 @@ import {
   getAssessmentsByType,
   generatePdfReport,
   getAiAnalysis,
-  getAssessmentHistory,
   saveAssessment,
   deleteAssessment,
   addAssessment,
   getBaselineData,
   analyzePdfAi
 } from '../controllers/assessmentController.js';
+import { getAssessmentHistory } from '../controllers/assessmentHistoryController.js';
 import { auth } from '../middleware/auth.js';
 
 // Configure multer for PDF upload (in-memory storage for processing)

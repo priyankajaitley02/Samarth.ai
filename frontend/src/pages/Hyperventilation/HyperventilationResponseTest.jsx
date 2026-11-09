@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Button, Typography, Paper, CircularProgress } from '@mui/material';
+import { Alert, Box, Button, Typography, Paper, CircularProgress } from '@mui/material';
 import HyperventilationSignalGraph from './HyperventilationSignalGraph';
 import HyperventilationCautionModal from './HyperventilationCautionModal';
 import HyperventilationTestResults from './HyperventilationTestResults';
@@ -7,6 +7,7 @@ import useHyperventilationEEGStream from './useHyperventilationEEGStream';
 import { Bar } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip, Legend } from 'chart.js';
 import { useAuth } from '../../contexts/AuthContext';
+import api from '../../services/api.js';
 
 const DEFAULT_PHASES = [
   { name: 'baseline', min: 10, max: 30, default: 10 },
@@ -26,6 +27,7 @@ const HyperventilationResponseTest = ({ userId: propUserId } = {}) => {
   const [loadingResults, setLoadingResults] = useState(false);
   const { eegData, bands, spikeDetected, connected, connect, disconnect } = useHyperventilationEEGStream(testId); // Only EEG
   const [creating, setCreating] = useState(false);
+  const [requestError, setRequestError] = useState('');
 
   ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
@@ -52,30 +54,23 @@ const HyperventilationResponseTest = ({ userId: propUserId } = {}) => {
   const createTest = async () => {
     try {
       setCreating(true);
+      setRequestError('');
       setShowCaution(false); // Close modal after agreement
-      const actualUserId = propUserId || (user && user.id) || undefined;
-      const resp = await fetch('/api/tests/hyperventilation/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: actualUserId }) });
-      const text = await resp.text();
-      let json = null;
-      if (text) {
-        try { json = JSON.parse(text); } catch (e) { console.warn('start test: non-JSON response', e); }
-      }
+      const actualUserId = propUserId || user?.id || user?._id;
+      const { data } = await api.post('/tests/hyperventilation/start', { userId: actualUserId });
 
-      if (!resp.ok) {
-        console.error('start test failed', resp.status, text);
-        setCreating(false);
-        return;
-      }
-
-      if (json && json.testId) {
-        setTestId(json.testId);
+      if (data?.testId) {
+        setTestId(data.testId);
         // connect ws after test created with explicit testId to avoid stale state
-        connect(json.testId);
+        connect(data.testId);
         setPhaseIndex(0);
       } else {
-        console.warn('start test returned no testId', json, text);
+        throw new Error('The server did not return a test ID.');
       }
-    } catch (e) { console.error(e); } finally { setCreating(false); }
+    } catch (error) {
+      console.error('Unable to start hyperventilation test:', error);
+      setRequestError(error.response?.data?.message || 'Unable to start the test. Please check your connection and sign in again.');
+    } finally { setCreating(false); }
   };
 
   const handlePhaseAction = async (action) => {
@@ -83,8 +78,13 @@ const HyperventilationResponseTest = ({ userId: propUserId } = {}) => {
     const phase = DEFAULT_PHASES[phaseIndex].name;
     const ts = new Date().toISOString();
     try {
-      await fetch('/api/tests/hyperventilation/phase', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ testId, phase, action, timestamp: ts }) });
-    } catch (e) { console.error(e); }
+      await api.post('/tests/hyperventilation/phase', { testId, phase, action, timestamp: ts });
+      setRequestError('');
+    } catch (error) {
+      console.error('Unable to update hyperventilation phase:', error);
+      setRequestError(error.response?.data?.message || 'Unable to save the phase update. Please retry before continuing.');
+      return;
+    }
 
     if (action === 'start') {
       setCountdown(timers[phaseIndex]);
@@ -98,34 +98,38 @@ const HyperventilationResponseTest = ({ userId: propUserId } = {}) => {
   };
 
   const stopTest = async () => {
+    let completed = false;
     try {
       setLoadingResults(true);
-      const actualUserId = propUserId || (user && user.id) || undefined;
-      const resp = await fetch('/api/tests/hyperventilation/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ testId, userId: actualUserId }) });
-      const json = await resp.json();
-      console.log('Complete test response:', { status: resp.status, ok: resp.ok, json });
+      const { data: json } = await api.post('/tests/hyperventilation/complete', { testId });
+      console.log('Complete test response:', json);
       
-      if (resp.ok && json.summary) {
+      if (json?.success && json.summary) {
         console.log('Setting test results:', json.summary);
         setTestResults(json.summary);
-      } else if (!resp.ok || json.success === false) {
+        completed = true;
+        setRequestError('');
+      } else if (json?.success === false) {
         console.error('Test completion failed:', json.message, json.debug);
-        alert(`Test completion failed: ${json.message || 'The server could not save the completed test.'}\n\nPlease check:\n- WebSocket connection was active\n- All phases were completed\n- Data was being captured\n\nDebug info: ${JSON.stringify(json.debug || {})}`);
+        setRequestError(json.message || 'The server could not save the completed test.');
         setTestResults(null);
       } else {
         console.error('Unexpected response format or error:', json);
-        alert('Failed to complete test. The server response was unexpected. Please try again or contact support.');
+        setRequestError('The server returned an unexpected response. Please retry completing the test.');
         setTestResults(null);
       }
-    } catch (e) { 
-      console.error('stopTest error:', e); 
-      alert('An error occurred while completing the test: ' + e.message);
+    } catch (error) {
+      console.error('stopTest error:', error);
+      const message = error.response?.data?.message || error.message;
+      setRequestError('Test completion failed: ' + message);
       setTestResults(null);
     } finally {
       setLoadingResults(false);
       setRunningPhase(false);
-      setPhaseIndex(3);
-      disconnect();
+      if (completed) {
+        setPhaseIndex(3);
+        disconnect();
+      }
     }
   };
 
@@ -137,12 +141,13 @@ const HyperventilationResponseTest = ({ userId: propUserId } = {}) => {
         onCancel={() => setShowCaution(false)}
       />
       <Paper sx={{ p: 2 }}>
+        {requestError && <Alert severity="error" sx={{ mb: 2 }}>{requestError}</Alert>}
         {phaseIndex === -1 && (
           <Box>
             <Typography variant="h5">Hyperventilation Response Test</Typography>
             <Typography sx={{ mt: 1 }}>This test records EEG through three phases to observe any provoked abnormalities. This is not a diagnostic test.</Typography>
             <Typography sx={{ mt: 1, color: 'error.main' }}>Safety: Stop immediately if you feel dizzy, faint, or unwell.</Typography>
-            <Button variant="contained" sx={{ mt: 2 }} onClick={() => setShowCaution(true)}>Start Test</Button>
+            <Button variant="contained" sx={{ mt: 2 }} onClick={() => setShowCaution(true)} disabled={creating}>Start Test</Button>
           </Box>
         )}
 
@@ -187,7 +192,7 @@ const HyperventilationResponseTest = ({ userId: propUserId } = {}) => {
               ) : (
                 <Button variant="outlined" onClick={() => handlePhaseAction('end')}>End Phase</Button>
               )}
-              <Button onClick={stopTest} color="error">End Test</Button>
+              <Button onClick={stopTest} color="error" disabled={loadingResults}>End Test</Button>
             </Box>
           </Box>
         )}
@@ -200,7 +205,7 @@ const HyperventilationResponseTest = ({ userId: propUserId } = {}) => {
                 <Typography>Processing your test results...</Typography>
               </Box>
             ) : testResults ? (
-              <HyperventilationTestResults summary={testResults} testId={testId} />
+              <HyperventilationTestResults summary={testResults} />
             ) : (
               <Box>
                 <Typography variant="h6">Test Complete</Typography>

@@ -77,9 +77,13 @@ export const assessmentService = {
   },
 
   // Get user's assessment history
-  getAssessmentHistory: async (userId, type = null) => {
+  getAssessmentHistory: async (...args) => {
     try {
-      const assessments = await assessment.getHistory(type);
+      const [userOrType, type] = args;
+      const requestedType = type || (
+        Object.values(ASSESSMENT_TYPES).includes(userOrType) ? userOrType : null
+      );
+      const assessments = await assessment.getHistory(requestedType);
       return assessments;
     } catch (error) {
       console.error('Error getting assessment history:', error);
@@ -335,10 +339,9 @@ const processJointAngles = (angles) => {
   return angles;
 };
 
-export const fetchAllAssessments = async (userId) => {
+export const fetchAllAssessments = async () => {
   try {
-    // The problem is in the endpoint URL - fixing it to match the backend route
-    const response = await api.get(`/assessments/history?userId=${userId}`);
+    const response = await api.get('/assessments/history');
     return response.data.data || response.data;
   } catch (error) {
     console.error('Error fetching assessments:', error);
@@ -349,11 +352,11 @@ export const fetchAllAssessments = async (userId) => {
   }
 };
 
-export const fetchAssessmentsByType = async (userId, type) => {
+export const fetchAssessmentsByType = async (...args) => {
   try {
-    // Update this route too to match the backend configuration
-    const response = await api.get(`/assessments/history`, { 
-      params: { userId, type }
+    const type = args[args.length - 1];
+    const response = await api.get('/assessments/history', {
+      params: { type }
     });
     return response.data.data || response.data;
   } catch (error) {

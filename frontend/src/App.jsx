@@ -97,15 +97,15 @@ function App() {
             <Route path="/about" element={<ProtectedRoute><AboutPage/></ProtectedRoute>} />
             
             {/* Assessment Routes */}
-            <Route path="/assessment/eye-movement" element={<ProtectedRoute><EyeMovement /></ProtectedRoute>} />
-            <Route path="/assessment/neck-mobility" element={<ProtectedRoute><NeckMobility /></ProtectedRoute>} />
+            <Route path="/assessment/eye-movement" element={<ProtectedRoute><EyeMovement userId={user?.id || user?._id} /></ProtectedRoute>} />
+            <Route path="/assessment/neck-mobility" element={<ProtectedRoute><NeckMobility userId={user?.id || user?._id} /></ProtectedRoute>} />
             <Route path="/assessment/neuro" element={<ProtectedRoute><NeuroAssessment /></ProtectedRoute>} />
             <Route path="/assessment/hyperventilation" element={<ProtectedRoute><HyperventilationResponseTest /></ProtectedRoute>} />
             <Route path="/assessment/facial-symmetry" element={<ProtectedRoute><FacialSymmetry /></ProtectedRoute>} />
             <Route path="/assessment/tremor" element={<ProtectedRoute><Tremor userId={user?.id} /></ProtectedRoute>} />
-            <Route path="/assessment/response-time" element={<ProtectedRoute><ResponseTime /></ProtectedRoute>} />
-            <Route path="/assessment/gait-analysis" element={<ProtectedRoute><GaitAnalysis /></ProtectedRoute>} />
-            <Route path="/assessment/finger-tapping" element={<ProtectedRoute><FingerTapping /></ProtectedRoute>} />
+            <Route path="/assessment/response-time" element={<ProtectedRoute><ResponseTime userId={user?.id || user?._id} /></ProtectedRoute>} />
+            <Route path="/assessment/gait-analysis" element={<ProtectedRoute><GaitAnalysis userId={user?.id || user?._id} /></ProtectedRoute>} />
+            <Route path="/assessment/finger-tapping" element={<ProtectedRoute><FingerTapping userId={user?.id || user?._id} /></ProtectedRoute>} />
 
             {/* Therapy Module Route */}
             <Route path="/therapy" element={<ProtectedRoute><TherapyHome /></ProtectedRoute>} />

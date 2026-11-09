@@ -79,18 +79,10 @@ export const getBaselineData = async (req, res) => {
 
 export const saveAssessment = async (req, res) => {
   try {
-    const { userId, type, data, metrics, status, timestamp } = req.body;
-
-    console.log('Received assessment data:', req.body);
+    const { type, data, metrics, status, timestamp } = req.body;
+    const userId = req.user._id.toString();
 
     // Validate required fields
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        error: 'userId is required'
-      });
-    }
-
     if (!type) {
       return res.status(400).json({
         success: false,
@@ -530,7 +522,7 @@ export const deleteAssessment = async (req, res) => {
     const { id } = req.params;
     const assessment = await Assessment.findOneAndDelete({
       _id: id,
-      user: req.user.userId
+      userId: req.user._id.toString()
     });
 
     if (!assessment) {

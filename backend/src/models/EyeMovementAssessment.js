@@ -36,6 +36,14 @@ const eyeMovementSchema = new mongoose.Schema({
     type: String,
     default: 'eyeMovement'
   },
+  assessmentId: {
+    type: String
+  },
+  status: {
+    type: String,
+    enum: ['COMPLETED', 'FAILED', 'IN_PROGRESS'],
+    default: 'COMPLETED'
+  },
   metrics: {
     CALIBRATION: {
       summary: summaryMetricsSchema,
@@ -67,6 +75,11 @@ const eyeMovementSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+eyeMovementSchema.index(
+  { userId: 1, assessmentId: 1 },
+  { unique: true, partialFilterExpression: { assessmentId: { $type: 'string' } } }
+);
 
 const EyeMovementAssessment = mongoose.model('EyeMovementAssessment', eyeMovementSchema);
 export default EyeMovementAssessment;

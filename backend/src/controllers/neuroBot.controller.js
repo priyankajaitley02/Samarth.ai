@@ -37,7 +37,7 @@ const PREDEFINED_QUESTIONS = {
 };
 
 export const startSession = async (req, res) => {
-  const { userId } = req.body || {};
+  const userId = req.user._id.toString();
   const sessionId = uuidv4();
 
   sessions[sessionId] = {
@@ -69,6 +69,9 @@ export const processAnswer = async (req, res) => {
     const session = sessions[sessionId];
 
     if (!session) return res.status(400).json({ error: "Session not found" });
+    if (session.userId !== req.user._id.toString()) {
+      return res.status(403).json({ error: "You can only access your own session" });
+    }
 
     session.history.push({ from: "user", text: answer });
 
@@ -129,6 +132,9 @@ export const generateReport = async (req, res) => {
   const session = sessions[sessionId];
 
   if (!session) return res.status(400).json({ error: "Session not found" });
+  if (session.userId !== req.user._id.toString()) {
+    return res.status(403).json({ error: "You can only access your own session" });
+  }
 
   try {
       const generation = await generateMedicalReport(
@@ -154,44 +160,35 @@ export const generateReport = async (req, res) => {
       };
       
       // Save session data to DB as a specialized assessment
-      if (session.userId) {
-          console.log("[NeuroBot] Saving assessment result", {
-            generationStatus
-          });
-          try {
-              const savedAssessment = await NeuroBotAssessment.create({
-                  userId: session.userId,
-                  type: 'neurobot',
-                  status: generationStatus === "SUCCEEDED" ? 'COMPLETED' : 'FAILED',
-                  failureReason,
-                  timestamp: new Date(),
-                  history: session.history,
-                  metrics: {
-                      riskLevel: report?.riskLevel || 'Unknown',
-                      summary: report?.summary || '',
-                      recommendations: report?.recommendations || [],
-                      overallScore: generationStatus === "FAILED"
-                        ? null
-                        : report?.riskLevel === 'Low'
-                          ? 90
-                          : report?.riskLevel === 'Medium'
-                            ? 60
-                            : 30
-                  },
-                  report: persistedReport
-              });
-              console.log("[NeuroBot] Assessment saved", {
-                assessmentId: savedAssessment._id,
-                generationStatus
-              });
-          } catch (dbErr) {
-              console.error("[NeuroBot] Failed to save assessment to DB:", dbErr);
-          }
-      } else {
-          console.warn("[NeuroBot] No userId found in session, skipping DB persistence.");
-      }
+      const savedAssessment = await NeuroBotAssessment.findOneAndUpdate(
+        { userId: req.user._id.toString(), sessionId },
+        { $set: {
+          userId: req.user._id.toString(),
+          sessionId,
+          type: 'neurobot',
+          status: generationStatus === "SUCCEEDED" ? 'COMPLETED' : 'FAILED',
+          failureReason,
+          timestamp: new Date(),
+          history: session.history,
+          metrics: {
+              riskLevel: report?.riskLevel || 'Unknown',
+              summary: report?.summary || '',
+              recommendations: report?.recommendations || [],
+              overallScore: generationStatus === "FAILED"
+                ? null
+                : report?.riskLevel === 'Low'
+                  ? 90
+                  : report?.riskLevel === 'Medium'
+                    ? 60
+                    : 30
+          },
+          report: persistedReport
+        } },
+        { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+      );
 
       res.json({
+        assessmentId: savedAssessment._id,
         answers: session.extractedData,
         history: session.history,
         report: persistedReport,

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import { useEyeTracking } from './hooks/useEyeTracking';
 import { ASSESSMENT_PHASES } from './constants/assessmentConfig';
 import Target from './components/Target';
@@ -231,7 +232,7 @@ const PhaseResults = ({ phase, data }) => {
         <Grid item xs={12} sm={6} md={3}>
           <MetricCard
             title="Accuracy"
-            value={data.summary.accuracy || 75.0}
+            value={data.summary.accuracy ?? 0}
             icon={<VisibilityIcon color="primary" />}
             description="Gaze accuracy score"
           />
@@ -276,23 +277,16 @@ const AssessmentPhases = ({ currentPhase }) => {
 
 // Add these utility functions before the EyeMovement component
 const calculateAverageScore = (metrics, metric) => {
-  const scores = [];
-  if (metrics.SACCADIC_TEST?.summary?.[metric]) scores.push(metrics.SACCADIC_TEST.summary[metric]);
-  if (metrics.PURSUIT_TEST?.summary?.[metric]) scores.push(metrics.PURSUIT_TEST.summary[metric]);
-  if (metrics.CALIBRATION?.summary?.[metric]) scores.push(metrics.CALIBRATION.summary[metric]);
-  if (metrics.FIXATION_TEST?.summary?.[metric]) scores.push(metrics.FIXATION_TEST.summary[metric]);
-  
+  const scores = ['SACCADIC_TEST', 'PURSUIT_TEST', 'CALIBRATION', 'FIXATION_TEST']
+    .map(phase => metrics[phase]?.summary?.[metric])
+    .filter(value => typeof value === 'number' && Number.isFinite(value));
   return scores.length ? scores.reduce((a, b) => a + b) / scores.length : 0;
 };
 
-// Make sure the composite score calculation properly includes accuracy
 const calculateCompositeScore = (metrics) => {
   const velocity = calculateAverageScore(metrics, 'mean_velocity');
-  // Use a reasonable default for accuracy if not present
-  const accuracy = calculateAverageScore(metrics, 'accuracy') || 75.0;
+  const accuracy = calculateAverageScore(metrics, 'accuracy');
   const smoothness = calculateAverageScore(metrics, 'movement_smoothness');
-  
-  // Weight the scores (can be adjusted based on importance)
   return (velocity * 0.3 + accuracy * 0.4 + smoothness * 0.3);
 };
 
@@ -315,6 +309,8 @@ const EyeMovement = ({ userId, onComplete }) => {
 
   const [progress, setProgress] = useState(0);
   const [saveStatus, setSaveStatus] = useState({ saving: false, error: null });
+  const [startError, setStartError] = useState(null);
+  const assessmentIdRef = useRef(null);
 
   useEffect(() => {
     if (currentPhase) {
@@ -333,6 +329,8 @@ const EyeMovement = ({ userId, onComplete }) => {
   const handleStart = async () => {
     try {
       setProgress(0);
+      setStartError(null);
+      assessmentIdRef.current = uuidv4();
       await startRecording();
     } catch (err) {
       console.error('Failed to start recording:', err);
@@ -340,13 +338,13 @@ const EyeMovement = ({ userId, onComplete }) => {
       // Display user-friendly error message based on the type of error
       if (err.message.includes('mimeType is not supported')) {
         // Compatibility issue
-        setError('Your browser does not support the required video recording features. Please try using Chrome or Firefox on desktop.');
+        setStartError('Your browser does not support the required video recording features. Please try using Chrome or Firefox on desktop.');
       } else if (err.message.includes('Permission denied') || err.message.includes('NotAllowedError')) {
         // Permission issue
-        setError('Camera access denied. Please enable camera permissions for this site.');
+        setStartError('Camera access denied. Please enable camera permissions for this site.');
       } else {
         // General error
-        setError(`Recording failed: ${err.message}`);
+        setStartError(`Recording failed: ${err.message}`);
       }
     }
   };
@@ -363,41 +361,26 @@ const EyeMovement = ({ userId, onComplete }) => {
       if (!metrics) {
         throw new Error('No assessment data available');
       }
+      if (!assessmentIdRef.current) {
+        throw new Error('Start the assessment before saving results');
+      }
 
-      // Ensure all phases have valid accuracy values
-      const ensureAccuracy = (phaseData) => {
-        if (!phaseData) return { summary: { accuracy: 75.0 } };
-        if (!phaseData.summary) return { ...phaseData, summary: { accuracy: 75.0 } };
-        if (typeof phaseData.summary.accuracy === 'undefined' || 
-            phaseData.summary.accuracy === null || 
-            phaseData.summary.accuracy === 0) {
-          return {
-            ...phaseData,
-            summary: {
-              ...phaseData.summary,
-              accuracy: 75.0
-            }
-          };
-        }
-        return phaseData;
-      };
-
-      // Format the metrics data properly
       const formattedMetrics = {
-        CALIBRATION: ensureAccuracy(metrics.CALIBRATION),
-        SACCADIC_TEST: ensureAccuracy(metrics.SACCADIC_TEST),
-        PURSUIT_TEST: ensureAccuracy(metrics.PURSUIT_TEST),
-        FIXATION_TEST: ensureAccuracy(metrics.FIXATION_TEST),
+        CALIBRATION: metrics.CALIBRATION,
+        SACCADIC_TEST: metrics.SACCADIC_TEST,
+        PURSUIT_TEST: metrics.PURSUIT_TEST,
+        FIXATION_TEST: metrics.FIXATION_TEST,
         assessmentType: 'eyeMovement',
         overall: {
           velocityScore: calculateAverageScore(metrics, 'mean_velocity'),
-          accuracyScore: calculateAverageScore(metrics, 'accuracy') || 75.0,
+          accuracyScore: calculateAverageScore(metrics, 'accuracy'),
           smoothnessScore: calculateAverageScore(metrics, 'movement_smoothness'),
           compositeScore: calculateCompositeScore(metrics)
         }
       };
 
       const assessmentData = {
+        assessmentId: assessmentIdRef.current,
         userId,
         type: 'eyeMovement',
         timestamp: new Date().toISOString(),
@@ -493,7 +476,9 @@ const EyeMovement = ({ userId, onComplete }) => {
           Assessment Results
         </Typography>
 
-        {Object.entries(metrics).map(([phase, data]) => (
+        {Object.entries(metrics)
+          .filter(([, data]) => data?.summary && data?.temporal)
+          .map(([phase, data]) => (
           <PhaseResults key={phase} phase={phase} data={data} />
         ))}
 
@@ -612,7 +597,7 @@ const EyeMovement = ({ userId, onComplete }) => {
               borderRadius: 2
             }}
           >
-            {error}
+            {error || startError}
           </Alert>
         )}
 

@@ -1,14 +1,15 @@
 import express from 'express';
 import { tremorService } from '../services/tremorService.js';
 import { tremorController } from '../controllers/tremorController.js';
+import { auth } from '../middleware/auth.js';
 import { tremorAnalyzer } from '../services/tremorAnalyzer.js';
 
 const router = express.Router(); 
 
 // REST endpoints
-router.post('/save', express.json(), (req, res) => tremorController.save(req, res));
-router.get('/history', (req, res) => tremorController.getHistory(req, res));
-router.get('/baseline/:userId', (req, res) => tremorController.getBaseline(req, res));
+router.post('/save', auth, express.json(), (req, res) => tremorController.save(req, res));
+router.get('/history', auth, (req, res) => tremorController.getHistory(req, res));
+router.get('/baseline/:userId', auth, (req, res) => tremorController.getBaseline(req, res));
 
 // Fetch latest raw buffer for a device (optional helper for frontend / debugging)
 router.get('/device/:deviceId/raw', async (req, res) => {

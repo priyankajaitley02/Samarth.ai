@@ -330,7 +330,7 @@ export const analyzeSpeech = () => {
 // Initialize TensorFlow
 initTensorFlow().catch(console.error);
 
-const CENTRALIZED_ML_SERVICE_URL = "http://localhost:8000";
+const CENTRALIZED_ML_SERVICE_URL = import.meta.env.VITE_ML_SERVICE_URL || "http://localhost:8000";
 
 export const MLService = {
   BASE_URL: CENTRALIZED_ML_SERVICE_URL,
@@ -345,10 +345,8 @@ export const MLService = {
         method: 'POST',
         body: formData,
         mode: 'cors',
-        credentials: 'include',
         headers: {
-          'Accept': 'application/json',
-          'Origin': 'http://localhost:5173'
+          'Accept': 'application/json'
         }
       });
 
@@ -369,6 +367,9 @@ export const MLService = {
 
     } catch (error) {
       console.error('Error analyzing eyes:', error);
+      if (error instanceof TypeError) {
+        throw new Error(`Could not reach the eye-analysis service at ${this.BASE_URL}. Confirm the ML service is running and its CORS settings allow this website.`);
+      }
       throw error;
     }
   },

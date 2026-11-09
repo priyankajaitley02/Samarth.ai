@@ -3,14 +3,7 @@ import { tremorService } from '../services/tremorService.js';
 export const tremorController = {
   async save(req, res) {
     try {
-      console.log('Received tremor assessment request:', {
-        path: req.path,
-        method: req.method,
-        body: req.body,
-        userId: req.body.userId
-      });
-
-      const assessmentData = req.body;
+      const assessmentData = { ...req.body, userId: req.user._id.toString() };
 
       // Attach raw buffer from device if client didn't include rawData
       try {
@@ -66,8 +59,8 @@ export const tremorController = {
 
   async getHistory(req, res) {
     try {
-      const { userId, limit } = req.query;
-      const history = await tremorService.getHistory(userId, limit);
+      const { limit } = req.query;
+      const history = await tremorService.getHistory(req.user._id.toString(), limit);
       
       res.json({
         success: true,
@@ -83,7 +76,7 @@ export const tremorController = {
 
   async getBaseline(req, res) {
     try {
-      const { userId } = req.params;
+      const userId = req.user._id.toString();
       
       if (!userId) {
         return res.status(400).json({
