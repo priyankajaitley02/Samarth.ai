@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
 import mongoose from 'mongoose';
-import cors from 'cors';
 import expressWs from 'express-ws';
 import userRoutes from './routes/user.js';
 import { registerNeuroWs, registerDeviceWs } from './routes/neuroAssessment.js';
@@ -15,6 +14,7 @@ import authRoutes from './routes/auth.js';
 import diagnosticRoutes from './routes/diagnosticRoutes.js';
 import apiRoutes from './routes/api.js';
 import { requestLogger } from './middleware/requestLogger.js';
+import { corsMiddleware } from './middleware/cors.js';
 import { startSimulator } from './services/neuroSimulator.js';
 import neuroBotRoutes from './routes/neuroBot.routes.js';
 import { gaitAnalysisController } from './controllers/gaitAnalysisController.js';
@@ -31,6 +31,9 @@ import {
 
 const app = express();
 
+// Handle CORS preflights before any routes can answer OPTIONS implicitly.
+app.use(corsMiddleware);
+
 // attach express-ws so routers can define websocket endpoints (keeps integration minimal)
 expressWs(app);
 
@@ -39,15 +42,22 @@ const sensorClients = new Set();
 const gaitDisconnectTimers = { left: null, right: null };
 let gaitSensorState = createGaitSensorState();
 const SENSOR_HEARTBEAT_INTERVAL_MS = 30000;
+const hasAlzheimerSensorValue = (reading) => [
+  reading?.fsr1, reading?.fsr2, reading?.fsr3,
+  reading?.fsr4, reading?.fsr5, reading?.fsr6,
+  reading?.ax, reading?.ay, reading?.az,
+  reading?.gx, reading?.gy, reading?.gz
+].some(Number.isFinite);
 
 function broadcastGaitSensorUpdate(update) {
   const side = update.side;
+  const source = update.source || "esp32";
   if (!gaitSensorState[side]) return;
 
   gaitSensorState = applyGaitSensorUpdate(gaitSensorState, update);
 
   if (gaitDisconnectTimers[side]) clearTimeout(gaitDisconnectTimers[side]);
-  if (update.reading || update.connected) {
+  if (update.reading || hasAlzheimerSensorValue(update.alzheimerReading) || update.connected) {
     gaitDisconnectTimers[side] = setTimeout(() => {
       broadcastGaitSensorUpdate({
         side,
@@ -58,10 +68,17 @@ function broadcastGaitSensorUpdate(update) {
     }, 2500);
   }
 
-  broadcastGaitSensorState(update.source || "esp32", update.deviceId, update.timestamp);
+  broadcastGaitSensorState(source, update.deviceId, update.timestamp, {
+    side,
+    deviceId: update.deviceId,
+    source: update.alzheimerSource || source,
+    timestamp: update.timestamp || Date.now(),
+    connected: update.connected,
+    reading: update.alzheimerReading || update.reading
+  });
 }
 
-function broadcastGaitSensorState(source, deviceId, timestamp = Date.now()) {
+function broadcastGaitSensorState(source, deviceId, timestamp = Date.now(), alzheimerUpdate = null) {
   const payload = {
     type: "esp32_insole_data",
     source,
@@ -74,7 +91,11 @@ function broadcastGaitSensorState(source, deviceId, timestamp = Date.now()) {
   sensorClients.forEach((client) => {
     if (client.readyState === 1 && !client.isSensorProducer) {
       try {
-        client.send(JSON.stringify(payload));
+        client.send(JSON.stringify(
+          client.isAlzheimerGaitClient && alzheimerUpdate
+            ? { ...payload, alzheimerUpdate }
+            : payload
+        ));
       } catch (error) {
         console.error("Error broadcasting Gait sensor data:", error.message);
       }
@@ -94,6 +115,7 @@ app.ws('/ws/sensors', (ws, req) => {
       ? 'left'
       : null;
   ws.isSensorProducer = Boolean(deviceSide);
+  ws.isAlzheimerGaitClient = req.query?.assessment === 'alzheimers';
   ws.isAlive = true;
 
   const heartbeatTimer = setInterval(() => {
@@ -114,7 +136,7 @@ app.ws('/ws/sensors', (ws, req) => {
     ws.isAlive = true;
   });
 
-  if (!ws.isSensorProducer) {
+  if (!ws.isSensorProducer && !ws.isAlzheimerGaitClient) {
     broadcastGaitSensorState("esp32_state", deviceId);
   }
   
@@ -150,6 +172,7 @@ app.ws('/ws/sensors', (ws, req) => {
           side: packet.side,
           deviceId: packet.deviceId,
           reading: packet.reading,
+          alzheimerReading: packet.alzheimerReading,
           source: "esp32_wifi",
           timestamp: packet.timestamp
         });
@@ -162,8 +185,9 @@ app.ws('/ws/sensors', (ws, req) => {
 
       for (const line of lines) {
         const parsed = parseEsp32CsvLine(line);
-        if (parsed === 'header') continue;
-        if (!parsed) {
+        const alzheimerReading = parseEsp32CsvLine(line, { preserveMissing: true });
+        if (parsed === 'header' || alzheimerReading === 'header') continue;
+        if (!alzheimerReading || (!parsed && !hasAlzheimerSensorValue(alzheimerReading))) {
           console.warn('Ignoring invalid sensor CSV message');
           continue;
         }
@@ -175,6 +199,17 @@ app.ws('/ws/sensors', (ws, req) => {
           side: deviceSide,
           deviceId,
           reading: parsed,
+          alzheimerReading: {
+            ...alzheimerReading,
+            mpu_ok: alzheimerReading.mpu_ok ?? [
+              alzheimerReading.ax,
+              alzheimerReading.ay,
+              alzheimerReading.az,
+              alzheimerReading.gx,
+              alzheimerReading.gy,
+              alzheimerReading.gz
+            ].some(value => Number.isFinite(value))
+          },
           source: "esp32_wifi",
           timestamp: Date.now()
         });
@@ -269,12 +304,6 @@ try {
 app.use('/api/assessment', neuroRouter);
 // Mount tremor REST routes
 app.use('/api/tremor', tremorRouter);
-
-// Middleware
-app.use(cors({
-  origin: ['https://samarth-app.vercel.app', 'http://localhost:5173'], // Fix CORS issue
-  credentials: true
-}));
 
 // Request logger middleware
 app.use(requestLogger);

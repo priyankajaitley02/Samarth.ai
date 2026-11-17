@@ -18,6 +18,7 @@ import {
   TimeScale
 } from 'chart.js';
 import 'chartjs-adapter-date-fns';
+import { finalizeTremorAssessment } from './tremorSaveLifecycle.js';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, ChartTooltip, Legend, TimeScale);
 
@@ -29,7 +30,10 @@ const Tremor = ({ userId, onComplete }) => {
   const [deviceId, setDeviceId] = useState(null);
   const [logs, setLogs] = useState([]);
   const [history, setHistory] = useState([]); // {t, frequency, amplitude}
+  const [saveStatus, setSaveStatus] = useState({ saving: false, error: null, saved: false });
   const wsRef = useRef(null);
+  const saveSnapshotRef = useRef(null);
+  const saveInProgressRef = useRef(false);
   const backendHost = window?.location?.hostname || 'localhost';
   const wsProtocol = window?.location?.protocol === 'https:' ? 'wss' : 'ws';
   const wsUrl = `${wsProtocol}://${backendHost}:5000/api/tremor/stream`;
@@ -128,20 +132,68 @@ const Tremor = ({ userId, onComplete }) => {
   }
 
   async function handleSave() {
-    if (!userId) { addLog('Cannot save: userId missing'); return; }
-    if (!metrics) { addLog('No metrics to save'); return; }
+    if (saveInProgressRef.current || saveStatus.saved) return;
+    if (!userId) {
+      const message = 'Cannot save: userId missing';
+      addLog(message);
+      setSaveStatus({ saving: false, error: message, saved: false });
+      return;
+    }
+    if (!metrics && !saveSnapshotRef.current) {
+      const message = 'No metrics to save';
+      addLog(message);
+      setSaveStatus({ saving: false, error: message, saved: false });
+      return;
+    }
+
+    saveInProgressRef.current = true;
+    setSaveStatus({ saving: true, error: null, saved: false });
     try {
-      const payload = { userId, metrics, timestamp: new Date().toISOString(), type: 'tremor' };
-      if (deviceId) payload.deviceId = deviceId;
-      const { data: json } = await api.post('/tremor/save', payload);
-      if (json.success) {
-        addLog('Saved assessment');
-        if (onComplete) onComplete(json.data);
-      } else {
-        addLog('Save failed: ' + (json.error || json.message || 'unknown'));
+      const savedAssessment = await finalizeTremorAssessment({
+        capture: () => {
+          if (!saveSnapshotRef.current) {
+            const capturedHistory = history
+              .slice()
+              .reverse()
+              .filter(sample => Number.isFinite(new Date(sample.t).getTime()));
+            saveSnapshotRef.current = {
+              userId,
+              timestamp: new Date().toISOString(),
+              type: 'tremor',
+              deviceId,
+              metrics: {
+                ...metrics,
+                rawData: {
+                  frequencies: capturedHistory.map(sample => sample.frequency),
+                  amplitudes: capturedHistory.map(sample => sample.amplitude),
+                  timestamps: capturedHistory.map(sample => new Date(sample.t))
+                }
+              }
+            };
+          }
+          return saveSnapshotRef.current;
+        },
+        stop: disconnect,
+        save: payload => api.post('/tremor/save', payload),
+        onSaved: data => {
+          setSaveStatus({ saving: false, error: null, saved: true });
+          addLog('Saved assessment');
+          try {
+            if (onComplete) onComplete(data);
+          } catch (error) {
+            addLog(`Completion callback failed: ${error.message}`);
+          }
+        }
+      });
+      if (savedAssessment) {
+        setSaveStatus({ saving: false, error: null, saved: true });
       }
     } catch (error) {
-      addLog(`Save error: ${error.response?.data?.error || error.message}`);
+      const message = error.response?.data?.error || error.message || 'Unable to save assessment';
+      addLog(`Save error: ${message}`);
+      setSaveStatus({ saving: false, error: message, saved: false });
+    } finally {
+      saveInProgressRef.current = false;
     }
   }
 
@@ -241,6 +293,11 @@ const Tremor = ({ userId, onComplete }) => {
                 <Button variant="outlined" onClick={disconnect} disabled={!connected && !(wsRef.current && wsRef.current.readyState === WebSocket.CONNECTING)} sx={{ mr: 1 }}>Disconnect</Button>
                 <Button variant="text" onClick={() => { disconnect(); connect(); }}>Reconnect</Button>
               </Box>
+              {saveStatus.saved && (
+                <Typography color="success.main" role="status" sx={{ mt: 1 }}>
+                  Assessment saved successfully.
+                </Typography>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -321,7 +378,7 @@ const Tremor = ({ userId, onComplete }) => {
                   <Button
                     variant="contained"
                     onClick={handleSave}
-                    disabled={!metrics}
+                    disabled={(!metrics && !saveSnapshotRef.current) || saveStatus.saving || saveStatus.saved}
                     sx={{
                       whiteSpace: 'nowrap',
                       minWidth: 150,
@@ -329,10 +386,15 @@ const Tremor = ({ userId, onComplete }) => {
                       flexShrink: 0
                     }}
                   >
-                    Save Assessment
+                    {saveStatus.saving ? 'Saving...' : saveStatus.saved ? 'Assessment Saved' : saveSnapshotRef.current ? 'Retry Save' : 'Save Assessment'}
                   </Button>
                 </Box>
               </Box>
+              {saveStatus.error && (
+                <Typography color="error" role="alert" sx={{ mt: 1 }}>
+                  Assessment was not saved: {saveStatus.error}
+                </Typography>
+              )}
             </CardContent>
           </Card>
         </Grid>

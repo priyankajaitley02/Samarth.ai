@@ -8,11 +8,12 @@ export const tremorController = {
       // Attach raw buffer from device if client didn't include rawData
       try {
         const deviceId = assessmentData.deviceId || assessmentData.metrics?.deviceId || req.query.deviceId || null;
-        if (deviceId && !assessmentData.metrics?.rawData) {
+        if (deviceId) {
           const raw = await tremorService.getLatestRaw(deviceId);
           if (raw && raw.samples && raw.samples.length > 0) {
             assessmentData.metrics = assessmentData.metrics || {};
             assessmentData.metrics.rawData = {
+              ...assessmentData.metrics.rawData,
               sampleRate: raw.sampleRate,
               samples: raw.samples 
             };
@@ -42,7 +43,7 @@ export const tremorController = {
       res.status(201).json({
         success: true,
         data: {
-          ...assessmentData,
+          ...result.data,
           id: result.data._id,
           savedAt: result.data.createdAt
         }

@@ -69,6 +69,23 @@ describe("ESP32 gait packet normalization", () => {
     expect(packet.reading).toMatchObject({ fsr1: 20, ax: null, gy: null, mpu_ok: false });
   });
 
+  it("exposes partial valid IMU axes to the Alzheimer path without changing the legacy MPU flag", () => {
+    const packet = normalizeEsp32JsonPacket({
+      deviceId: "left-insole",
+      fsr: { sensor1: 0 },
+      imu: { accel: { x: 1 }, gyro: {} }
+    });
+
+    expect(packet.reading.mpu_ok).toBe(false);
+    expect(packet.alzheimerReading).toMatchObject({
+      fsr1: 0,
+      ax: 1,
+      ay: null,
+      gx: null,
+      mpu_ok: true
+    });
+  });
+
   it("rejects malformed or unknown JSON packets", () => {
     expect(normalizeEsp32JsonPacket(null)).toBeNull();
     expect(normalizeEsp32JsonPacket({ deviceId: "unknown", fsr: { sensor1: 1 } })).toBeNull();

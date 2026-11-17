@@ -42,6 +42,8 @@ import FacialSymmetry from '../components/assessments/FacialSymmetry';
 import Tremor from '../components/assessments/Tremor';
 import ResponseTime from '../components/assessments/ResponseTime';
 import GaitAnalysis from '../components/assessments/GaitAnalysis';
+import AlzheimerGaitAnalysis from '../components/assessments/AlzheimerGaitAnalysis';
+import { selectAssessmentComponent } from '../components/assessments/assessmentSelection';
 import FingerTapping from '../components/assessments/FingerTapping';
 import SpeechPatternAssessment from '../components/assessments/SpeechPatternAssessment';
 import WordListAssessment from '../components/assessments/WordList/WordListAssessment';
@@ -348,7 +350,12 @@ const Assessment = () => {
     const assessment = assessmentTypes.find(a => a.id === currentAssessment);
     if (!assessment) return null;
 
-    const AssessmentComponent = assessment.component;
+    const AssessmentComponent = selectAssessmentComponent({
+      assessmentId: assessment.id,
+      disorder: selectedDisorder,
+      defaultComponent: assessment.component,
+      alzheimerGaitComponent: AlzheimerGaitAnalysis
+    });
     return (
       <MotionContainer 
         maxWidth="lg"

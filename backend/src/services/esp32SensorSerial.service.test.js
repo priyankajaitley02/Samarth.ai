@@ -59,6 +59,30 @@ describe("ESP32 serial CSV parsing", () => {
     expect(parseEsp32CsvLine("not,a,valid,row")).toBeNull();
   });
 
+  it("preserves empty CSV cells as missing for Alzheimer readings without changing legacy parsing", () => {
+    const line = "100,0,,3,4,5,6,0.1,,0.3,1,2,3,24.5,true";
+    const legacyReading = parseEsp32CsvLine(line);
+    const alzheimerReading = parseEsp32CsvLine(line, { preserveMissing: true });
+
+    expect(legacyReading.fsr1).toBe(0);
+    expect(legacyReading.fsr2).toBe(0);
+    expect(alzheimerReading.fsr1).toBe(0);
+    expect(alzheimerReading.fsr2).toBeNull();
+    expect(alzheimerReading.ay).toBeNull();
+    expect(alzheimerReading.mpu_ok).toBe(true);
+  });
+
+  it("parses valid channels when the CSV MPU status field is missing", () => {
+    const reading = parseEsp32CsvLine(
+      "100,0,2,3,4,5,6,0.1,0.2,0.3,1,2,3,24.5,",
+      { preserveMissing: true }
+    );
+
+    expect(reading.fsr1).toBe(0);
+    expect(reading.fsr2).toBe(2);
+    expect(reading.mpu_ok).toBeNull();
+  });
+
   it("reports the exact rejection reason without changing parser behavior", () => {
     expect(diagnoseEsp32CsvLine("1,2,3")).toMatchObject({
       valid: false,
@@ -137,7 +161,7 @@ describe("ESP32 serial CSV parsing", () => {
 
     ports.get("COM7").emit(
       "data",
-      Buffer.from("100,1,2,3,4,5,6,0.1,0.2,0.3,1,2,3,24.5,true\n")
+      Buffer.from("100,1,,3,4,5,6,0.1,0.2,0.3,1,2,3,24.5,true\n")
     );
     ports.get("COM8").emit(
       "data",
@@ -147,7 +171,10 @@ describe("ESP32 serial CSV parsing", () => {
     expect(ports.size).toBe(2);
     const readings = gaitUpdates.filter((update) => update.reading);
     expect(readings.map((update) => update.side)).toEqual(["left", "right"]);
+    expect(readings[0].alzheimerSource).toBe("esp32_serial");
     expect(readings[0].reading.fsr1).toBe(1);
+    expect(readings[0].reading.fsr2).toBe(0);
+    expect(readings[0].alzheimerReading.fsr2).toBeNull();
     expect(readings[0].reading.gz).toBe(3);
     expect(readings[1].reading.fsr1).toBe(11);
     expect(readings[1].reading.gz).toBe(9);
@@ -167,6 +194,32 @@ describe("ESP32 serial CSV parsing", () => {
     port.emit("data", Buffer.from("100,1,2,not-a-number\n"));
 
     expect(gaitUpdates.filter((update) => update.reading)).toEqual([]);
+    service.stop();
+  });
+
+  it("forwards valid Alzheimer channels when the CSV MPU status cell is empty", () => {
+    const gaitUpdates = [];
+    const tremorUpdates = [];
+    const service = new Esp32SensorSerialService({
+      portConfigs: [{ side: "left", portPath: "COM7" }],
+      serialPortFactory: (options) => new FakeSerialPort(options)
+    });
+    service.start((payload) => tremorUpdates.push(payload), (payload) => gaitUpdates.push(payload));
+    service.ports.get("left").port.emit(
+      "data",
+      Buffer.from("100,0,2,3,4,5,6,0.1,0.2,0.3,1,2,3,24.5,\n")
+    );
+
+    const alzheimerUpdates = gaitUpdates.filter((update) => update.alzheimerReading);
+    expect(alzheimerUpdates).toHaveLength(1);
+    expect(alzheimerUpdates[0].reading).toBeUndefined();
+    expect(alzheimerUpdates[0].alzheimerReading).toMatchObject({
+      fsr1: 0,
+      fsr2: 2,
+      ax: 0.1,
+      mpu_ok: true
+    });
+    expect(tremorUpdates.filter((update) => update.reading)).toHaveLength(0);
     service.stop();
   });
 

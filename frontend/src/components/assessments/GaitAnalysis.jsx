@@ -32,6 +32,11 @@ import HybridGaitInsights from '../gait/HybridGaitInsights';
 import { GaitMetricsAnalyzer } from '../../services/metrics/gaitMetrics';
 import { useAuth } from '../../contexts/AuthContext';
 import { assessment, specializedAssessments } from '../../services/api';
+import { useAlzheimerGaitSensors } from './hooks/useAlzheimerGaitSensors.js';
+import {
+  getRealAssessmentSensorBuffer,
+  FSR_SENSOR_KEYS
+} from './alzheimerGaitSensors.js';
 
 // MetricCard component
 const MetricCard = ({ title, value, icon, description }) => (
@@ -53,7 +58,7 @@ const MetricCard = ({ title, value, icon, description }) => (
   </Card>
 );
 
-const GaitAnalysis = ({ userId, onComplete }) => {
+const GaitAnalysis = ({ userId, onComplete, alzheimersMode = false }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -87,8 +92,6 @@ const GaitAnalysis = ({ userId, onComplete }) => {
   const { currentUser } = useAuth();
   const [analysisComplete, setAnalysisComplete] = useState(false);
   const [ws, setWs] = useState(null);
-  const sensorBufferRef = useRef([]); // Store raw sensor packets during assessment
-  const isRecordingRef = useRef(false); // Ref for WebSocket handler to access current recording state
   const [hybridMetrics, setHybridMetrics] = useState(null);
   const lastSensorPacketRef = useRef(null);
   const sensorStatusTimerRef = useRef(null);
@@ -101,7 +104,7 @@ const GaitAnalysis = ({ userId, onComplete }) => {
       gyro: { x: null, y: null, z: null }
     }
   });
-  const [sensorData, setSensorData] = useState({
+  const [legacySensorData, setLegacySensorData] = useState({
     deviceId: null,
     connected: false,
     leftFoot: {
@@ -122,6 +125,14 @@ const GaitAnalysis = ({ userId, onComplete }) => {
     },
     timestamp: null
   });
+  const isRecordingRef = useRef(false);
+  const sensorBufferRef = useRef([]);
+  const alzheimerSensor = useAlzheimerGaitSensors({
+    enabled: alzheimersMode,
+    isRecordingRef,
+    sensorBufferRef
+  });
+  const sensorData = alzheimersMode ? alzheimerSensor.sensorData : legacySensorData;
 
   // Cleanup function
   const cleanup = useCallback(() => {
@@ -158,6 +169,8 @@ const GaitAnalysis = ({ userId, onComplete }) => {
 
   // Connect to WebSocket server
   useEffect(() => {
+    if (alzheimersMode) return undefined;
+
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const host = window.location.hostname || 'localhost';
     const websocket = new WebSocket(`${protocol}://${host}:5000/ws/sensors`);
@@ -178,7 +191,7 @@ const GaitAnalysis = ({ userId, onComplete }) => {
 
     websocket.onclose = () => {
       console.log('❌ WebSocket disconnected');
-      setSensorData(prev => ({
+      setLegacySensorData(prev => ({
         ...prev,
         connected: false,
         leftFoot: clearFootData(prev.leftFoot),
@@ -188,7 +201,7 @@ const GaitAnalysis = ({ userId, onComplete }) => {
 
     websocket.onerror = (error) => {
       console.error('WebSocket error:', error);
-      setSensorData(prev => ({
+      setLegacySensorData(prev => ({
         ...prev,
         connected: false,
         leftFoot: clearFootData(prev.leftFoot),
@@ -201,7 +214,7 @@ const GaitAnalysis = ({ userId, onComplete }) => {
         lastSensorPacketRef.current &&
         Date.now() - lastSensorPacketRef.current > 2000
       ) {
-        setSensorData(prev => ({
+        setLegacySensorData(prev => ({
           ...prev,
           connected: false,
           leftFoot: clearFootData(prev.leftFoot),
@@ -462,6 +475,10 @@ const GaitAnalysis = ({ userId, onComplete }) => {
         Math.max(1, realtimeData.stabilityData.stabilityTrends.timeSeriesData.length);
       
       // Format the metrics for the specialized assessment API
+      const sensorBuffer = alzheimersMode
+        ? getRealAssessmentSensorBuffer(sensorData, sensorBufferRef.current)
+        : sensorBufferRef.current.length > 0 ? sensorBufferRef.current : undefined;
+
       const assessmentData = {
         userId,
         type: 'gaitAnalysis',
@@ -502,10 +519,10 @@ const GaitAnalysis = ({ userId, onComplete }) => {
           }
         },
         // Include sensor buffer for backend processing
-        sensorBuffer: sensorBufferRef.current.length > 0 ? sensorBufferRef.current : undefined
+        sensorBuffer
       };
 
-      console.log('💾 Saving assessment with', sensorBufferRef.current.length, 'sensor samples');
+      console.log('💾 Saving assessment with', sensorBuffer?.length || 0, 'sensor samples');
 
       // Use specialized assessment API instead
       const response = await specializedAssessments.gaitAnalysis.save(assessmentData);
@@ -575,28 +592,42 @@ const GaitAnalysis = ({ userId, onComplete }) => {
         <Typography variant="h6">
           ESP32 Insole Sensors
         </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}>
           {[
-            ['Left', sensorData.leftFoot.connected],
-            ['Right', sensorData.rightFoot.connected]
-          ].map(([label, connected]) => (
+            ['Left', sensorData.leftFoot],
+            ['Right', sensorData.rightFoot]
+          ].map(([label, foot]) => (
             <Box key={label} sx={{ display: 'flex', alignItems: 'center', ml: 2 }}>
               <Box
                 sx={{
                   width: 10,
                   height: 10,
                   borderRadius: '50%',
-                  bgcolor: connected ? 'success.main' : 'error.main',
+                  bgcolor: foot.connected
+                    ? 'success.main'
+                    : foot.status === 'connecting' || foot.status === 'reconnecting'
+                      ? 'warning.main'
+                      : 'error.main',
                   mr: 0.75
                 }}
               />
               <Typography variant="body2" color="text.secondary">
-                {label}: {connected ? 'Connected' : 'Disconnected'}
+                {label}: {alzheimersMode
+                  ? foot.connected ? 'Connected' : foot.status === 'connecting'
+                    ? 'Connecting' : foot.status === 'reconnecting'
+                      ? 'Reconnecting' : 'Disconnected'
+                  : foot.connected ? 'Connected' : 'Disconnected'}
               </Typography>
             </Box>
           ))}
         </Box>
       </Box>
+
+      {alzheimersMode && (
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+          WebSocket gateway: {alzheimerSensor.streamConnected ? 'Online' : 'Reconnecting'}
+        </Typography>
+      )}
       
       <Grid container spacing={2}>
         {/* Left Foot FSR Sensors */}
@@ -606,16 +637,25 @@ const GaitAnalysis = ({ userId, onComplete }) => {
               Left Foot FSR Sensors
             </Typography>
             <Grid container spacing={1}>
-              {Object.entries(sensorData.leftFoot.fsr).map(([key, value]) => (
+              {FSR_SENSOR_KEYS.map(key => {
+                const foot = sensorData.leftFoot;
+                const value = foot.fsr[key];
+                return (
                 <Grid item xs={4} key={`left-${key}`}>
                   <Box sx={{ mb: 1 }}>
                     <Typography variant="caption" color="text.secondary">
                       {key.replace('sensor', 'FSR ')}
                     </Typography>
-                    <Typography variant="h6">{value ?? 'N/A'}</Typography>
+                    <Typography variant="h6">
+                      {Number.isFinite(value) ? value : 'N/A'}
+                    </Typography>
+                    {alzheimersMode && foot.fsrStale?.[key] && (
+                      <Typography variant="caption" color="warning.main">Stale</Typography>
+                    )}
                   </Box>
                 </Grid>
-              ))}
+                );
+              })}
             </Grid>
           </Paper>
         </Grid>
@@ -627,16 +667,25 @@ const GaitAnalysis = ({ userId, onComplete }) => {
               Right Foot FSR Sensors
             </Typography>
             <Grid container spacing={1}>
-              {Object.entries(sensorData.rightFoot.fsr).map(([key, value]) => (
+              {FSR_SENSOR_KEYS.map(key => {
+                const foot = sensorData.rightFoot;
+                const value = foot.fsr[key];
+                return (
                 <Grid item xs={4} key={`right-${key}`}>
                   <Box sx={{ mb: 1 }}>
                     <Typography variant="caption" color="text.secondary">
                       {key.replace('sensor', 'FSR ')}
                     </Typography>
-                    <Typography variant="h6">{value ?? 'N/A'}</Typography>
+                    <Typography variant="h6">
+                      {Number.isFinite(value) ? value : 'N/A'}
+                    </Typography>
+                    {alzheimersMode && foot.fsrStale?.[key] && (
+                      <Typography variant="caption" color="warning.main">Stale</Typography>
+                    )}
                   </Box>
                 </Grid>
-              ))}
+                );
+              })}
             </Grid>
           </Paper>
         </Grid>
@@ -664,8 +713,12 @@ const GaitAnalysis = ({ userId, onComplete }) => {
                     {['x', 'y', 'z'].map(axis => (
                       <Grid item xs={4} key={`${label}-accel-${axis}`}>
                         <Typography variant="body2">
-                          {axis.toUpperCase()}: {foot.imu.accel[axis]?.toFixed(2) ?? 'N/A'}
+                          {axis.toUpperCase()}: {Number.isFinite(foot.imu.accel[axis])
+                            ? foot.imu.accel[axis].toFixed(2) : 'N/A'}
                         </Typography>
+                        {alzheimersMode && foot.imuStale?.accel?.[axis] && (
+                          <Typography variant="caption" color="warning.main">Stale</Typography>
+                        )}
                       </Grid>
                     ))}
                   </Grid>
@@ -676,8 +729,12 @@ const GaitAnalysis = ({ userId, onComplete }) => {
                     {['x', 'y', 'z'].map(axis => (
                       <Grid item xs={4} key={`${label}-gyro-${axis}`}>
                         <Typography variant="body2">
-                          {axis.toUpperCase()}: {foot.imu.gyro[axis]?.toFixed(2) ?? 'N/A'}
+                          {axis.toUpperCase()}: {Number.isFinite(foot.imu.gyro[axis])
+                            ? foot.imu.gyro[axis].toFixed(2) : 'N/A'}
                         </Typography>
+                        {alzheimersMode && foot.imuStale?.gyro?.[axis] && (
+                          <Typography variant="caption" color="warning.main">Stale</Typography>
+                        )}
                       </Grid>
                     ))}
                     </Grid>
@@ -841,7 +898,7 @@ const GaitAnalysis = ({ userId, onComplete }) => {
     const legacyImu = data.imu;
 
     // Merge each side so a packet from one insole cannot erase the other.
-    setSensorData(prevData => ({
+    setLegacySensorData(prevData => ({
       deviceId: data.deviceId,
       connected: data.type === 'esp32_insole_data'
         ? Boolean(data.leftFoot?.connected || data.rightFoot?.connected)
@@ -970,6 +1027,12 @@ const GaitAnalysis = ({ userId, onComplete }) => {
                       ⚠️ No sensor data collected. Ensure test-sensor-client is running.
                     </Box>
                   )}
+                </Alert>
+              )}
+              {alzheimersMode && analysisComplete &&
+                !getRealAssessmentSensorBuffer(sensorData, sensorBufferRef.current) && (
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  Bilateral FSR and MPU readings are incomplete. Sensor-derived metrics will be excluded from this saved assessment.
                 </Alert>
               )}
               

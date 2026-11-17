@@ -19,6 +19,12 @@ const CSV_FIELDS = [
 ];
 
 const numericFields = CSV_FIELDS.filter((field) => field !== "mpu_ok");
+const hasAlzheimerSensorValue = (reading) => [
+  reading?.fsr1, reading?.fsr2, reading?.fsr3,
+  reading?.fsr4, reading?.fsr5, reading?.fsr6,
+  reading?.ax, reading?.ay, reading?.az,
+  reading?.gx, reading?.gy, reading?.gz
+].some(Number.isFinite);
 
 export function diagnoseEsp32CsvLine(line) {
   const trimmed = line.trim();
@@ -60,7 +66,7 @@ export function diagnoseEsp32CsvLine(line) {
   return { valid: true, reason: "valid data row", fieldCount: values.length };
 }
 
-export function parseEsp32CsvLine(line) {
+export function parseEsp32CsvLine(line, { preserveMissing = false } = {}) {
   const values = line.trim().split(",").map((value) => value.trim());
   if (values.length !== CSV_FIELDS.length) return null;
   if (values.every((value, index) => value.toLowerCase() === CSV_FIELDS[index])) {
@@ -72,9 +78,18 @@ export function parseEsp32CsvLine(line) {
   );
 
   for (const field of numericFields) {
+    if (preserveMissing && reading[field] === "") {
+      reading[field] = null;
+      continue;
+    }
     const value = Number(reading[field]);
     if (!Number.isFinite(value)) return null;
     reading[field] = value;
+  }
+
+  if (preserveMissing && reading.mpu_ok === "") {
+    reading.mpu_ok = null;
+    return reading;
   }
 
   const mpuValue = reading.mpu_ok.toLowerCase();
@@ -178,6 +193,9 @@ export function normalizeEsp32JsonPacket(packet, fallbackDeviceId = null) {
   const hasCompleteImu = [accel.x ?? accel.ax, accel.y ?? accel.ay, accel.z ?? accel.az,
     gyro.x ?? gyro.gx, gyro.y ?? gyro.gy, gyro.z ?? gyro.gz]
     .every((value) => finiteOrNull(value) !== null);
+  const hasAnyImu = [accel.x ?? accel.ax, accel.y ?? accel.ay, accel.z ?? accel.az,
+    gyro.x ?? gyro.gx, gyro.y ?? gyro.gy, gyro.z ?? gyro.gz]
+    .some((value) => finiteOrNull(value) !== null);
   const mpuConnected = explicitMpuConnected ?? hasCompleteImu;
 
   const reading = {
@@ -206,6 +224,10 @@ export function normalizeEsp32JsonPacket(packet, fallbackDeviceId = null) {
     side,
     deviceId: String(deviceId),
     reading,
+    alzheimerReading: {
+      ...reading,
+      mpu_ok: explicitMpuConnected ?? hasAnyImu
+    },
     timestamp: finiteOrNull(packet.timestamp) || Date.now()
   };
 }
@@ -427,8 +449,10 @@ export class Esp32SensorSerialService {
 
     for (const line of lines) {
       const reading = parseEsp32CsvLine(line);
-      if (!reading || reading === "header") {
-        if (reading !== "header" && state.diagnosticLinesLogged < 5) {
+      const alzheimerReading = parseEsp32CsvLine(line, { preserveMissing: true });
+      if (reading === "header" || alzheimerReading === "header") continue;
+      if (!alzheimerReading || (!reading && !hasAlzheimerSensorValue(alzheimerReading))) {
+        if (state.diagnosticLinesLogged < 5) {
           const diagnosis = diagnoseEsp32CsvLine(line);
           console.warn(`[ESP32 Serial] Invalid CSV from ${config.side} insole`, {
             port: config.portPath,
@@ -441,27 +465,41 @@ export class Esp32SensorSerialService {
         continue;
       }
 
-      console.info(`[ESP32 Serial] Reading ${config.side} insole`, {
-        ax: reading.ax,
-        ay: reading.ay,
-        az: reading.az,
-        gx: reading.gx,
-        gy: reading.gy,
-        gz: reading.gz
-      });
+      if (reading) {
+        console.info(`[ESP32 Serial] Reading ${config.side} insole`, {
+          ax: reading.ax,
+          ay: reading.ay,
+          az: reading.az,
+          gx: reading.gx,
+          gy: reading.gy,
+          gz: reading.gz
+        });
 
-      this.broadcast?.({
-        type: "fsr_mpu_reading",
-        source: "esp32_serial",
-        serialConnected: true,
-        mpuConnected: reading.mpu_ok,
-        reading,
-        timestamp: Date.now()
-      });
+        this.broadcast?.({
+          type: "fsr_mpu_reading",
+          source: "esp32_serial",
+          serialConnected: true,
+          mpuConnected: reading.mpu_ok,
+          reading,
+          timestamp: Date.now()
+        });
+      }
       this.gaitBroadcast?.({
         side: config.side,
         deviceId: `${config.side}-insole`,
-        reading,
+        alzheimerSource: "esp32_serial",
+        reading: reading || undefined,
+        alzheimerReading: {
+          ...alzheimerReading,
+          mpu_ok: alzheimerReading.mpu_ok ?? [
+            alzheimerReading.ax,
+            alzheimerReading.ay,
+            alzheimerReading.az,
+            alzheimerReading.gx,
+            alzheimerReading.gy,
+            alzheimerReading.gz
+          ].some((value) => Number.isFinite(value))
+        },
         timestamp: Date.now()
       });
     }
