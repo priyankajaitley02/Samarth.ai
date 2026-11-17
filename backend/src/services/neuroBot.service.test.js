@@ -275,4 +275,28 @@ describe("MIET AI Services gateway fallback reliability", () => {
     expect(axios.post.mock.calls[1][1].model).toBe("qwen3.6:35b");
     expect(axios.post.mock.calls[0][2].headers.Authorization).toBe("Bearer dgx_test_key");
   });
+
+  it("reads the gateway message.content payload", async () => {
+    axios.post.mockResolvedValueOnce({
+      status: 200,
+      headers: { "x-request-id": "dgx-req-2" },
+      data: {
+        success: true,
+        model: "qwen3.5:9b",
+        message: {
+          role: "assistant",
+          content: JSON.stringify(validReport)
+        }
+      }
+    });
+
+    const result = await generateMedicalReport({ answer: "test" }, "en");
+
+    expect(result.generationStatus).toBe("SUCCEEDED");
+    expect(result.generationModel).toBe("qwen3.5:9b");
+    expect(result.report).toEqual(validReport);
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(axios.post.mock.calls[0][1].think).toBe(false);
+    expect(axios.post.mock.calls[0][1].stream).toBe(false);
+  });
 });

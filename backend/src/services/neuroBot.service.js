@@ -31,13 +31,11 @@ const GEMINI_MAX_RETRY_DELAY_MS = readBoundedInteger(
 // MIET AI Services (DGX) configuration and fallback models
 const DEFAULT_NEUROBOT_MODELS = [
   "qwen3.5:9b",
+  "qwen3-vl:8b-instruct",
+  "llama3.1:8b",
   "qwen3.6:35b",
   "gemma3:27b",
-  "gpt-oss:20b",
-  "qwen3:32b",
-  "deepseek-r1:70b",
-  "qwen3.5:122b",
-  "gpt-oss:120b"
+  "gpt-oss:20b"
 ];
 
 function getExternalProviderConfig() {
@@ -192,6 +190,43 @@ function isExternalProviderConfigured() {
   return Boolean(config.endpoint && config.apiKey);
 }
 
+function textFromContent(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (typeof part?.text === "string") return part.text;
+        if (typeof part?.content === "string") return part.content;
+        return "";
+      })
+      .join("");
+  }
+  return "";
+}
+
+function extractProviderText(data) {
+  if (!data) return "";
+  if (typeof data === "string") return data;
+
+  const candidates = [
+    data.output,
+    data.choices?.[0]?.message?.content,
+    data.choices?.[0]?.text,
+    data.message?.content,
+    data.content,
+    data.result,
+    data.response
+  ];
+
+  for (const candidate of candidates) {
+    const text = textFromContent(candidate);
+    if (text.trim()) return text;
+  }
+
+  return "";
+}
+
 async function callExternalProvider(prompt, requestedModel = null, sensitiveValues = []) {
   if (Array.isArray(requestedModel)) {
     sensitiveValues = requestedModel;
@@ -213,7 +248,9 @@ async function callExternalProvider(prompt, requestedModel = null, sensitiveValu
         provider.endpoint,
         {
           model,
-          messages: [{ role: "user", content: prompt }]
+          messages: [{ role: "user", content: prompt }],
+          stream: false,
+          think: false
         },
         {
           headers: {
@@ -225,13 +262,7 @@ async function callExternalProvider(prompt, requestedModel = null, sensitiveValu
         }
       );
 
-      const text =
-        response.data?.choices?.[0]?.message?.content ||
-        response.data?.choices?.[0]?.text ||
-        response.data?.output ||
-        response.data?.content ||
-        response.data?.result ||
-        response.data?.response;
+      const text = extractProviderText(response.data);
 
       if (typeof text !== "string" || !text.trim()) {
         throw new Error(`External provider model ${model} returned empty text`);

@@ -12,13 +12,11 @@ const DEFAULT_LLM_URL = 'https://ai-services.mietjmu.in/gateway/llm/chat';
 const DEFAULT_LLM_KEY = 'dgx_9606b21be98085d015540fa7b1a7e0d508661e6a30b6cda9';
 const DEFAULT_LLM_MODELS = [
   'qwen3.5:9b',
+  'qwen3-vl:8b-instruct',
+  'llama3.1:8b',
   'qwen3.6:35b',
   'gemma3:27b',
-  'gpt-oss:20b',
-  'qwen3:32b',
-  'deepseek-r1:70b',
-  'qwen3.5:122b',
-  'gpt-oss:120b'
+  'gpt-oss:20b'
 ];
 
 const getLlmConfig = () => ({
@@ -35,16 +33,40 @@ function getCandidateModels() {
   return Array.from(set);
 }
 
+function textFromContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (typeof part?.text === 'string') return part.text;
+        if (typeof part?.content === 'string') return part.content;
+        return '';
+      })
+      .join('');
+  }
+  return '';
+}
+
 function extractTextFromResponse(data) {
   if (!data) return '';
-  if (data.output) return typeof data.output === 'string' ? data.output : JSON.stringify(data.output);
-  if (data.choices && data.choices[0]) {
-    return data.choices[0].message?.content || data.choices[0].text || '';
-  }
-  if (data.content) return typeof data.content === 'string' ? data.content : JSON.stringify(data.content);
-  if (data.result) return typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
-  if (data.response) return typeof data.response === 'string' ? data.response : JSON.stringify(data.response);
   if (typeof data === 'string') return data;
+
+  const candidates = [
+    data.output,
+    data.choices?.[0]?.message?.content,
+    data.choices?.[0]?.text,
+    data.message?.content,
+    data.content,
+    data.result,
+    data.response
+  ];
+
+  for (const candidate of candidates) {
+    const text = textFromContent(candidate);
+    if (text.trim()) return text;
+  }
+
   return '';
 }
 
@@ -61,7 +83,9 @@ async function callLlmWithFallback(prompt) {
         config.url,
         {
           model: currentModel,
-          messages: [{ role: "user", content: prompt }]
+          messages: [{ role: "user", content: prompt }],
+          stream: false,
+          think: false
         },
         {
           headers: {
@@ -91,7 +115,7 @@ async function callLlmWithFallback(prompt) {
   // If Gemini API key is configured, fallback to Gemini
   if (process.env.GEMINI_API_KEY) {
     console.log('[AI Service] All gateway models failed. Attempting Gemini fallback...');
-    const geminiModels = [process.env.GEMINI_MODEL || 'gemini-3.6-flash', process.env.GEMINI_FALLBACK_MODEL || 'gemini-2.5-flash'];
+    const geminiModels = [process.env.GEMINI_MODEL || 'gemini-3.6-flash', process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.5-flash'];
     for (const gModel of geminiModels) {
       if (!gModel) continue;
       try {
